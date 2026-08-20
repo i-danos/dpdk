@@ -2635,3 +2635,29 @@ Description: Data Plane Development Kit (librte-vhost runtime library)
  in user-space and communicate directly with dedicated network interfaces.
  .
  This package contains the runtime libraries for librte-vhost.
+
+
+
+
+
+
+
+
+
+
+
+
+Package: dpdk-rte-kni-kmod-6.12.101+deb13-amd64
+Section: kernel
+Architecture: amd64 arm64 i386
+Depends: linux-image-6.12.101+deb13-amd64-signed (= 6.12.101-1) | linux-image-6.12.101+deb13-amd64-unsigned (= 6.12.101-1) | linux-image-6.12.101+deb13-amd64 (= 6.12.101-1)
+Provides: dpdk-rte-kni-kmod,
+Conflicts: dpdk-rte-kni-dkms,
+Built-Using: ${built:using:kernel},
+Description: Data Plane Development Kit (rte kni, igb uio modules)
+ DPDK is a set of libraries for fast packet processing. Applications run
+ in user-space and communicate directly with dedicated network interfaces.
+ This package contains the source code for the igb_uio kernel module.
+ .
+ This package provides the kernel drivers for userspace networking.
+ Includes Intel DPDK kernel modules.
