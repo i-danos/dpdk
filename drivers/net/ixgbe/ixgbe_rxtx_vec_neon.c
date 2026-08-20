@@ -206,6 +206,9 @@ static inline uint16_t
 _recv_raw_pkts_vec(struct ixgbe_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 		   uint16_t nb_pkts, uint8_t *split_packet)
 {
+	const struct rte_eth_dev *dev = &rte_eth_devices[rxq->port_id];
+	const struct ixgbe_vfta *vfta
+		= IXGBE_DEV_PRIVATE_TO_VFTA(dev->data->dev_private);
 	volatile union ixgbe_adv_rx_desc *rxdp;
 	struct ixgbe_rx_entry *sw_ring;
 	uint16_t nb_pkts_recd;
@@ -323,8 +326,10 @@ _recv_raw_pkts_vec(struct ixgbe_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 		/* D.3 copy final 3,4 data to rx_pkts */
 		vst1q_u8((void *)&rx_pkts[pos + 3]->rx_descriptor_fields1,
 			 pkt_mb4);
+		ixgbe_unknown_vlan_sw_filter_hdr(rx_pkts[pos + 3], vfta, rxq);
 		vst1q_u8((void *)&rx_pkts[pos + 2]->rx_descriptor_fields1,
 			 pkt_mb3);
+		ixgbe_unknown_vlan_sw_filter_hdr(rx_pkts[pos + 2], vfta, rxq);
 
 		/* D.2 pkt 1,2 set in_port/nb_seg and remove crc */
 		tmp = vsubq_u16(vreinterpretq_u16_u8(pkt_mb2), crc_adjust);
@@ -353,8 +358,10 @@ _recv_raw_pkts_vec(struct ixgbe_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 		/* D.3 copy final 1,2 data to rx_pkts */
 		vst1q_u8((uint8_t *)&rx_pkts[pos + 1]->rx_descriptor_fields1,
 			 pkt_mb2);
+		ixgbe_unknown_vlan_sw_filter_hdr(rx_pkts[pos + 1], vfta, rxq);
 		vst1q_u8((uint8_t *)&rx_pkts[pos]->rx_descriptor_fields1,
 			 pkt_mb1);
+		ixgbe_unknown_vlan_sw_filter_hdr(rx_pkts[pos], vfta, rxq);
 
 		desc_to_ptype_v(descs, rxq->pkt_type_mask, &rx_pkts[pos]);
 

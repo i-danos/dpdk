@@ -205,7 +205,7 @@ _F_(gather_bytes)(__m256i zero, const __m256i p[2], const uint32_t m[2],
  * Use two sets of metadata, each serves 8 flows max.
  */
 static inline int
-search_avx512x8x2(const struct rte_acl_ctx *ctx, const uint8_t **data,
+search_avx512x8x2(const struct rte_acl_rt_ctx *ctx, const uint8_t **data,
 	uint32_t *results, uint32_t total_packets, uint32_t categories)
 {
 	uint32_t i, *pm;

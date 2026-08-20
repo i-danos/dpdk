@@ -1397,7 +1397,7 @@ rte_cryptodev_asym_session_init(uint8_t dev_id,
 }
 
 struct rte_mempool *
-rte_cryptodev_sym_session_pool_create(const char *name, uint32_t nb_elts,
+rte_cryptodev_sym_session_pool_create_empty(const char *name, uint32_t nb_elts,
 	uint32_t elt_size, uint32_t cache_size, uint16_t user_data_size,
 	int socket_id)
 {
@@ -1412,9 +1412,8 @@ rte_cryptodev_sym_session_pool_create(const char *name, uint32_t nb_elts,
 	else
 		obj_sz = elt_size;
 
-	mp = rte_mempool_create(name, nb_elts, obj_sz, cache_size,
+	mp = rte_mempool_create_empty(name, nb_elts, obj_sz, cache_size,
 			(uint32_t)(sizeof(*pool_priv)),
-			NULL, NULL, NULL, NULL,
 			socket_id, 0);
 	if (mp == NULL) {
 		CDEV_LOG_ERR("%s(name=%s) failed, rte_errno=%d\n",
@@ -1433,9 +1432,44 @@ rte_cryptodev_sym_session_pool_create(const char *name, uint32_t nb_elts,
 	pool_priv->nb_drivers = nb_drivers;
 	pool_priv->user_data_sz = user_data_size;
 
+	rte_cryptodev_trace_sym_session_pool_create_empty(name, nb_elts,
+		elt_size, cache_size, user_data_size, mp);
+
+	return mp;
+}
+
+struct rte_mempool *
+rte_cryptodev_sym_session_pool_create(const char *name, uint32_t nb_elts,
+	uint32_t elt_size, uint32_t cache_size, uint16_t user_data_size,
+	int socket_id)
+{
+	int ret;
+	struct rte_mempool *mp;
+
+	mp = rte_cryptodev_sym_session_pool_create_empty(name, nb_elts,
+							 elt_size,
+							 cache_size,
+							 user_data_size,
+							 socket_id);
+	if (mp == NULL)
+		return NULL;
+
+	ret = rte_mempool_set_ops_byname(mp, "ring_mp_mc", NULL);
+	if (ret)
+		goto fail;
+
+
+	if (rte_mempool_populate_default(mp) < 0)
+		goto fail;
+
 	rte_cryptodev_trace_sym_session_pool_create(name, nb_elts,
 		elt_size, cache_size, user_data_size, mp);
+
 	return mp;
+
+fail:
+	rte_mempool_free(mp);
+	return NULL;
 }
 
 static unsigned int
@@ -1480,7 +1514,6 @@ rte_cryptodev_sym_session_create(struct rte_mempool *mp)
 
 	/* Allocate a session structure from the session pool */
 	if (rte_mempool_get(mp, (void **)&sess)) {
-		CDEV_LOG_ERR("couldn't get object from session mempool");
 		return NULL;
 	}
 

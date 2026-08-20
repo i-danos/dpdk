@@ -113,6 +113,7 @@ struct ixgbe_rx_queue {
 	uint16_t rx_free_trigger; /**< triggers rx buffer allocation */
 	uint8_t            rx_using_sse;
 	/**< indicates that vector RX is in use */
+	uint8_t            vf; /**< indicates that this is for a VF */
 #ifdef RTE_LIB_SECURITY
 	uint8_t            using_ipsec;
 	/**< indicates that IPsec RX feature is in use */
@@ -258,6 +259,30 @@ struct ixgbe_txq_ops {
 			 IXGBE_ADVTXD_DCMD_EOP)
 
 
+
+/*
+ * Filter out unknown vlans resulting from use of transparent vlan.
+ *
+ * When a VF is configured to use transparent vlans then the VF can
+ * see this VLAN being set in the packet, meaning that the transparent
+ * property isn't preserved. Furthermore, when the VF is used in a
+ * guest VM then there's no way of knowing for sure that transparent
+ * VLAN is in use and what tag value has been configured. So work
+ * around this by removing the VLAN flag if the VF isn't interested in
+ * the VLAN tag.
+ */
+static inline void
+ixgbevf_trans_vlan_sw_filter_hdr(struct rte_mbuf *m,
+				 const struct ixgbe_vfta *vfta)
+{
+	if (m->ol_flags & PKT_RX_VLAN) {
+		uint16_t vlan = m->vlan_tci & 0xFFF;
+
+		if (!ixgbe_vfta_is_vlan_set(vfta, vlan))
+			m->ol_flags &= ~(PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED);
+	}
+}
+
 /* Takes an ethdev and a queue and sets up the tx function to be used based on
  * the queue parameters. Used in tx_queue_setup by primary process and then
  * in dev_init by secondary process when attaching to an existing ethdev.
@@ -278,13 +303,17 @@ void ixgbe_set_tx_function(struct rte_eth_dev *dev, struct ixgbe_tx_queue *txq);
  *
  * @dev rte_eth_dev handle
  */
-void ixgbe_set_rx_function(struct rte_eth_dev *dev);
+void ixgbe_set_rx_function(struct rte_eth_dev *dev, bool vf);
 
 int ixgbe_check_supported_loopback_mode(struct rte_eth_dev *dev);
 uint16_t ixgbe_recv_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
 		uint16_t nb_pkts);
 uint16_t ixgbe_recv_scattered_pkts_vec(void *rx_queue,
 		struct rte_mbuf **rx_pkts, uint16_t nb_pkts);
+uint16_t ixgbevf_recv_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
+			       uint16_t nb_pkts);
+uint16_t ixgbevf_recv_scattered_pkts_vec(void *rx_queue,
+				 struct rte_mbuf **rx_pkts, uint16_t nb_pkts);
 int ixgbe_rx_vec_dev_conf_condition_check(struct rte_eth_dev *dev);
 int ixgbe_rxq_vec_setup(struct ixgbe_rx_queue *rxq);
 void ixgbe_rx_queue_release_mbufs_vec(struct ixgbe_rx_queue *rxq);

@@ -108,7 +108,7 @@ alloc_completion(struct completion *p, uint32_t size, uint32_t tries,
  */
 static inline void
 resolve_single_priority(uint64_t transition, int n,
-	const struct rte_acl_ctx *ctx, struct parms *parms,
+	const struct rte_acl_rt_ctx *ctx, struct parms *parms,
 	const struct rte_acl_match_results *p)
 {
 	if (parms[n].cmplt->count == ctx->num_tries ||
@@ -126,7 +126,7 @@ resolve_single_priority(uint64_t transition, int n,
  */
 static inline uint64_t
 acl_start_next_trie(struct acl_flow_data *flows, struct parms *parms, int n,
-	const struct rte_acl_ctx *ctx)
+	const struct rte_acl_rt_ctx *ctx)
 {
 	uint64_t transition;
 
@@ -190,7 +190,7 @@ acl_set_flow(struct acl_flow_data *flows, struct completion *cmplt,
 }
 
 typedef void (*resolve_priority_t)
-(uint64_t transition, int n, const struct rte_acl_ctx *ctx,
+(uint64_t transition, int n, const struct rte_acl_rt_ctx *ctx,
 	struct parms *parms, const struct rte_acl_match_results *p,
 	uint32_t categories);
 
@@ -201,7 +201,7 @@ typedef void (*resolve_priority_t)
  */
 static inline uint64_t
 acl_match_check(uint64_t transition, int slot,
-	const struct rte_acl_ctx *ctx, struct parms *parms,
+	const struct rte_acl_rt_ctx *ctx, struct parms *parms,
 	struct acl_flow_data *flows, resolve_priority_t resolve_priority)
 {
 	const struct rte_acl_match_results *p;

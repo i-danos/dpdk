@@ -7,7 +7,7 @@
 
 #include <rte_io.h>
 
-#define VMXNET3_MAX_MAC_ADDRS 1
+#define VMXNET3_MAX_MAC_ADDRS 10
 
 /* UPT feature to negotiate */
 #define VMXNET3_F_RXCSUM      0x0001
@@ -74,6 +74,8 @@ struct vmxnet3_hw {
 	uint16_t subsystem_device_id;
 	uint16_t subsystem_vendor_id;
 	bool adapter_stopped;
+	bool promiscuous_enabled;
+	uint32_t extra_mac_addresses;
 
 	uint8_t perm_addr[RTE_ETHER_ADDR_LEN];
 	uint8_t num_tx_queues;

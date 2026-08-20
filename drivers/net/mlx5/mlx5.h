@@ -969,6 +969,7 @@ struct mlx5_priv {
 	unsigned int reta_idx_n; /* RETA index size. */
 	struct mlx5_drop drop_queue; /* Flow drop queues. */
 	uint32_t flows; /* RTE Flow rules. */
+	void *root_drop_action; /* Pointer to root drop action. */
 	uint32_t ctrl_flows; /* Control flow rules. */
 	rte_spinlock_t flow_list_lock;
 	struct mlx5_obj_ops obj_ops; /* HW objects operations. */
@@ -1006,6 +1007,8 @@ struct mlx5_priv {
 	LIST_HEAD(fdir, mlx5_fdir_flow) fdir_flows; /* fdir flows. */
 	rte_spinlock_t shared_act_sl; /* Shared actions spinlock. */
 	uint32_t rss_shared_actions; /* RSS shared actions. */
+	struct mlx5_devx_obj *q_counters; /* DevX queue counter object. */
+	uint32_t counter_set_id; /* Queue counter ID to set in DevX objects. */
 };
 
 #define PORT_ID(priv) ((priv)->dev_data->port_id)
@@ -1106,7 +1109,8 @@ int mlx5_get_module_eeprom(struct rte_eth_dev *dev,
 			   struct rte_dev_eeprom_info *info);
 int mlx5_os_read_dev_stat(struct mlx5_priv *priv,
 			  const char *ctr_name, uint64_t *stat);
-int mlx5_os_read_dev_counters(struct rte_eth_dev *dev, uint64_t *stats);
+int mlx5_os_read_dev_counters(struct rte_eth_dev *dev, uint64_t *stats,
+			      uint16_t mlx5_stats_n);
 int mlx5_os_get_stats_n(struct rte_eth_dev *dev);
 void mlx5_os_stats_init(struct rte_eth_dev *dev);
 

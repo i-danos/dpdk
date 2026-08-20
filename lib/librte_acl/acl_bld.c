@@ -3,11 +3,14 @@
  */
 
 #include <rte_acl.h>
+#include <rte_hash.h>
 #include "tb_mem.h"
 #include "acl.h"
 
+#include <rte_jhash.h>
+
 #define	ACL_POOL_ALIGN		8
-#define	ACL_POOL_ALLOC_MIN	0x800000
+#define	ACL_POOL_ALLOC_MIN	1024
 
 /* number of pointers per alloc */
 #define ACL_PTR_ALLOC	32
@@ -94,6 +97,55 @@ static int acl_merge_trie(struct acl_build_context *context,
 static void
 acl_deref_ptr(struct acl_build_context *context,
 	struct rte_acl_node *node, int index);
+
+
+/* mask hash-table */
+
+#define MASK_HT_MAX_ELEMS (1 << 12)
+
+static struct rte_acl_bitset acl_mask_table[MASK_HT_MAX_ELEMS] __rte_cache_aligned;
+
+static struct rte_hash *rte_acl_mask_ht;
+
+int rte_acl_create_mask_ht(void)
+{
+	int ret;
+	char hash_name[] = "ACL_MASK_HT";
+	struct rte_hash *ht;
+
+	if (rte_acl_mask_ht)
+		return 0;
+
+	struct rte_hash_parameters hash_params = {
+		.entries = MASK_HT_MAX_ELEMS,
+		.key_len = sizeof(uint16_t),
+		.hash_func = rte_jhash,
+		.hash_func_init_val = 0,
+		.name = hash_name,
+		.socket_id = SOCKET_ID_ANY,
+		.reserved = 0,
+		.extra_flag = 0
+	};
+
+	rte_acl_mask_ht = rte_hash_create(&hash_params);
+	if (!rte_acl_mask_ht) {
+		RTE_LOG(ERR, ACL, "creation of mask hash-table failed: %s\n",
+			rte_strerror(rte_errno));
+
+		return -rte_errno;
+	}
+
+	return 0;
+}
+
+void rte_acl_destroy_mask_ht(void)
+{
+	if (rte_acl_mask_ht == NULL)
+		return;
+
+	rte_hash_free(rte_acl_mask_ht);
+	rte_acl_mask_ht = NULL;
+}
 
 static void *
 acl_build_alloc(struct acl_build_context *context, size_t n, size_t s)
@@ -312,6 +364,11 @@ acl_add_ptr_range(struct acl_build_context *context,
 	uint32_t n;
 	struct rte_acl_bitset bitset;
 
+	if (low == 0 && high == UINT8_MAX) {
+		memset(&bitset, ~0, sizeof(bitset));
+		goto done;
+	}
+
 	/* clear the bitset values */
 	for (n = 0; n < RTE_ACL_BIT_SET_SIZE; n++)
 		bitset.bits[n] = 0;
@@ -322,17 +379,28 @@ acl_add_ptr_range(struct acl_build_context *context,
 			bitset.bits[n / (sizeof(bits_t) * 8)] |=
 				1U << (n % (sizeof(bits_t) * CHAR_BIT));
 
+done:
 	return acl_add_ptr(context, root, node, &bitset);
 }
 
 /*
  * Generate a bitset from a byte value and mask.
  */
-static int
+static void
 acl_gen_mask(struct rte_acl_bitset *bitset, uint32_t value, uint32_t mask)
 {
-	int range = 0;
 	uint32_t n;
+	int ret = 0;
+	uint16_t key;
+
+	if (rte_acl_mask_ht) {
+		key = ((uint8_t) mask << 8) | (uint8_t) value;
+		ret = rte_hash_lookup(rte_acl_mask_ht, (const void *) &key);
+		if (ret >= 0) {
+			memcpy(bitset, &acl_mask_table[ret], sizeof(*bitset));
+			return;
+		}
+	}
 
 	/* clear the bitset values */
 	for (n = 0; n < RTE_ACL_BIT_SET_SIZE; n++)
@@ -341,12 +409,25 @@ acl_gen_mask(struct rte_acl_bitset *bitset, uint32_t value, uint32_t mask)
 	/* for each bit in value/mask, add bit to set */
 	for (n = 0; n < UINT8_MAX + 1; n++) {
 		if ((n & mask) == value) {
-			range++;
 			bitset->bits[n / (sizeof(bits_t) * 8)] |=
 				1U << (n % (sizeof(bits_t) * CHAR_BIT));
 		}
 	}
-	return range;
+
+	if (rte_acl_mask_ht) {
+		key = ((uint8_t) mask << 8) | (uint8_t) value;
+
+		/* fail caching gracefully */
+		ret = rte_hash_add_key(rte_acl_mask_ht, &key);
+		if (ret < 0) {
+			RTE_LOG(DEBUG, ACL,
+				"Failed to cache bitset for value: %x / mask: %x: %s\n",
+				value, mask, rte_strerror(-ret));
+			return;
+		}
+
+		memcpy(&acl_mask_table[ret], bitset, sizeof(*bitset));
+	}
 }
 
 /*
@@ -772,9 +853,20 @@ acl_merge_trie(struct acl_build_context *context,
 static void
 acl_build_reset(struct rte_acl_ctx *ctx)
 {
-	rte_free(ctx->mem);
-	memset(&ctx->num_categories, 0,
-		sizeof(*ctx) - offsetof(struct rte_acl_ctx, num_categories));
+	if (ctx->rcx == NULL)
+		return;
+
+	/* With QSBR RCU configured, in-place rebuilds
+	 * are supported, which doesn't allow releasing 
+	 * the current RT structure/memory, which might be
+	 * still used by other threads for classification
+	 * while the rebuild of the new ACL trie is ongoing.
+	 */
+	if (ctx->v)
+		return;
+
+	rte_free(ctx->rcx->mem);
+	memset(ctx->rcx, 0, sizeof(struct rte_acl_rt_ctx));
 }
 
 static void
@@ -1433,13 +1525,36 @@ acl_build_log(const struct acl_build_context *ctx)
 	}
 }
 
+static void
+init_build_rules(struct acl_build_context *bcx, const struct rte_acl_rule *rule,
+		 struct rte_acl_build_rule *br, uint32_t fn,
+		 struct rte_acl_build_rule **head, uint32_t **wp, uint32_t *n)
+{
+	uint32_t num = *n;
+
+	if ((rule->data.category_mask & bcx->category_mask) == 0)
+		return;
+
+	br[num].next = *head;
+	br[num].config = &bcx->cfg;
+	br[num].f = rule;
+	br[num].wildness = *wp;
+	*wp += fn;
+	*head = br + num;
+
+	num++;
+	*n = num;
+}
+
 static int
 acl_build_rules(struct acl_build_context *bcx)
 {
 	struct rte_acl_build_rule *br, *head;
 	const struct rte_acl_rule *rule;
+	struct rte_acl_rule *r;
+	void *key;
 	uint32_t *wp;
-	uint32_t fn, i, n, num;
+	uint32_t fn, i, n, num, iter = 0;
 	size_t ofs, sz;
 
 	fn = bcx->cfg.num_fields;
@@ -1453,17 +1568,19 @@ acl_build_rules(struct acl_build_context *bcx)
 	num = 0;
 	head = NULL;
 
-	for (i = 0; i != n; i++) {
-		rule = (const struct rte_acl_rule *)
-			((uintptr_t)bcx->acx->rules + bcx->acx->rule_sz * i);
-		if ((rule->data.category_mask & bcx->category_mask) != 0) {
-			br[num].next = head;
-			br[num].config = &bcx->cfg;
-			br[num].f = rule;
-			br[num].wildness = wp;
-			wp += fn;
-			head = br + num;
-			num++;
+	if (bcx->acx->ht) {
+		while (rte_hash_iterate(bcx->acx->ht,
+					(void *) &key,
+					(void **) &r,
+					&iter) >= 0)
+			init_build_rules(bcx, r, br, fn, &head, &wp, &num);
+	} else {
+		for (i = 0; i != n; i++) {
+			rule = (const struct rte_acl_rule *)
+				((uintptr_t)bcx->acx->rules
+				 + bcx->acx->rule_sz * i);
+
+			init_build_rules(bcx, rule, br, fn, &head, &wp, &num);
 		}
 	}
 
@@ -1477,7 +1594,7 @@ acl_build_rules(struct acl_build_context *bcx)
  * Copy data_indexes for each trie into RT location.
  */
 static void
-acl_set_data_indexes(struct rte_acl_ctx *ctx)
+acl_set_data_indexes(struct rte_acl_rt_ctx *ctx)
 {
 	uint32_t i, n, ofs;
 
@@ -1619,12 +1736,18 @@ rte_acl_build(struct rte_acl_ctx *ctx, const struct rte_acl_config *cfg)
 	uint32_t n;
 	size_t max_size;
 	struct acl_build_context bcx;
+	uint32_t data_index_sz;
+
+	data_index_sz = sizeof(((struct rte_acl_rt_ctx *)0)->data_indexes[0]);
 
 	rc = acl_check_bld_param(ctx, cfg);
 	if (rc != 0)
 		return rc;
 
 	acl_build_reset(ctx);
+
+	if (ctx->num_rules == 0)
+		return 0;
 
 	if (cfg->max_size == 0) {
 		n = NODE_MIN;
@@ -1644,16 +1767,16 @@ rte_acl_build(struct rte_acl_ctx *ctx, const struct rte_acl_config *cfg)
 			rc = rte_acl_gen(ctx, bcx.tries, bcx.bld_tries,
 				bcx.num_tries, bcx.cfg.num_categories,
 				RTE_ACL_MAX_FIELDS * RTE_DIM(bcx.tries) *
-				sizeof(ctx->data_indexes[0]), max_size);
+				data_index_sz, max_size);
 			if (rc == 0) {
 				/* set data indexes. */
-				acl_set_data_indexes(ctx);
+				acl_set_data_indexes(ctx->rcx);
 
 				/* determine can we always do 4B load */
 				ctx->first_load_sz = get_first_load_size(cfg);
 
 				/* copy in build config. */
-				ctx->config = *cfg;
+				ctx->rcx->config = *cfg;
 			}
 		}
 

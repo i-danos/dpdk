@@ -77,7 +77,9 @@
 
 #define ACTOR_STATE(_p, _f) (!!CHECK_FLAGS((_p)->actor_state, STATE_ ## _f))
 #define ACTOR_STATE_SET(_p, _f) SET_FLAGS((_p)->actor_state, STATE_ ## _f)
+#define ACTOR_STATE_SET_EXT(_p, _f) SET_FLAGS((_p)->actor_state_ext, STATE_ ## _f)
 #define ACTOR_STATE_CLR(_p, _f) CLEAR_FLAGS((_p)->actor_state, STATE_ ## _f)
+#define ACTOR_STATE_CLR_EXT(_p, _f) CLEAR_FLAGS((_p)->actor_state_ext, STATE_ ## _f)
 
 #define PARTNER_STATE(_p, _f) (!!CHECK_FLAGS((_p)->partner_state, STATE_ ## _f))
 #define PARTNER_STATE_SET(_p, _f) SET_FLAGS((_p)->partner_state, STATE_ ## _f)
@@ -90,6 +92,7 @@ struct port {
 	 * of port states.
 	 */
 	uint8_t actor_state;
+	uint8_t actor_state_ext;
 
 	/** The operational Actor's port parameters */
 	struct port_params actor;

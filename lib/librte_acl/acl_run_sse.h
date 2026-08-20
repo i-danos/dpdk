@@ -52,9 +52,9 @@ static const rte_xmm_t xmm_range_base = {
  * its priority for each category.
  */
 static inline void
-resolve_priority_sse(uint64_t transition, int n, const struct rte_acl_ctx *ctx,
-	struct parms *parms, const struct rte_acl_match_results *p,
-	uint32_t categories)
+resolve_priority_sse(uint64_t transition, int n,
+	const struct rte_acl_rt_ctx *ctx, struct parms *parms,
+	const struct rte_acl_match_results *p, uint32_t categories)
 {
 	uint32_t x;
 	xmm_t results, priority, results1, priority1, selector;
@@ -96,7 +96,7 @@ resolve_priority_sse(uint64_t transition, int n, const struct rte_acl_ctx *ctx,
  * Extract transitions from an XMM register and check for any matches
  */
 static void
-acl_process_matches(xmm_t *indices, int slot, const struct rte_acl_ctx *ctx,
+acl_process_matches(xmm_t *indices, int slot, const struct rte_acl_rt_ctx *ctx,
 	struct parms *parms, struct acl_flow_data *flows)
 {
 	uint64_t transition1, transition2;
@@ -121,9 +121,9 @@ acl_process_matches(xmm_t *indices, int slot, const struct rte_acl_ctx *ctx,
  * Check for any match in 4 transitions (contained in 2 SSE registers)
  */
 static __rte_always_inline void
-acl_match_check_x4(int slot, const struct rte_acl_ctx *ctx, struct parms *parms,
-	struct acl_flow_data *flows, xmm_t *indices1, xmm_t *indices2,
-	xmm_t match_mask)
+acl_match_check_x4(int slot, const struct rte_acl_rt_ctx *ctx,
+	struct parms *parms, struct acl_flow_data *flows, xmm_t *indices1,
+	xmm_t *indices2, xmm_t match_mask)
 {
 	xmm_t temp;
 
@@ -191,7 +191,7 @@ transition4(xmm_t next_input, const uint64_t *trans,
  * Execute trie traversal with 8 traversals in parallel
  */
 static inline int
-search_sse_8(const struct rte_acl_ctx *ctx, const uint8_t **data,
+search_sse_8(const struct rte_acl_rt_ctx *ctx, const uint8_t **data,
 	uint32_t *results, uint32_t total_packets, uint32_t categories)
 {
 	int n;
@@ -280,7 +280,7 @@ search_sse_8(const struct rte_acl_ctx *ctx, const uint8_t **data,
  * Execute trie traversal with 4 traversals in parallel
  */
 static inline int
-search_sse_4(const struct rte_acl_ctx *ctx, const uint8_t **data,
+search_sse_4(const struct rte_acl_rt_ctx *ctx, const uint8_t **data,
 	 uint32_t *results, int total_packets, uint32_t categories)
 {
 	int n;

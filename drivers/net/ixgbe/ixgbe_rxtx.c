@@ -642,6 +642,7 @@ ixgbe_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	uint16_t tx_id;
 	uint16_t tx_last;
 	uint16_t nb_tx;
+	uint16_t tx_mask;
 	uint16_t nb_used;
 	uint64_t tx_ol_req;
 	uint32_t ctx = 0;
@@ -659,6 +660,7 @@ ixgbe_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	tx_id   = txq->tx_tail;
 	txe = &sw_ring[tx_id];
 	txp = NULL;
+	tx_mask = txq->nb_tx_desc - 1;
 
 	/* Determine if the descriptor ring needs to be cleaned. */
 	if (txq->nb_tx_free < txq->tx_free_thresh)
@@ -733,8 +735,7 @@ ixgbe_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		tx_last = (uint16_t) (tx_id + nb_used - 1);
 
 		/* Circular ring */
-		if (tx_last >= txq->nb_tx_desc)
-			tx_last = (uint16_t) (tx_last - txq->nb_tx_desc);
+		tx_last = tx_last & tx_mask;
 
 		PMD_TX_LOG(DEBUG, "port_id=%u queue_id=%u pktlen=%u"
 			   " tx_first=%u tx_last=%u",
@@ -1468,6 +1469,9 @@ rx_desc_error_to_pkt_flags(uint32_t rx_status, uint16_t pkt_info,
 	    rx_udp_csum_zero_err)
 		pkt_flags &= ~PKT_RX_L4_CKSUM_BAD;
 
+	if (rx_status & (1 << IXGBE_RXDADV_ERR_RXE_BIT))
+		pkt_flags |= PKT_RX_RXE_SBP_BAD;
+
 	if ((rx_status & IXGBE_RXD_STAT_OUTERIPCS) &&
 	    (rx_status & IXGBE_RXDADV_ERR_OUTERIPER)) {
 		pkt_flags |= PKT_RX_EIP_CKSUM_BAD;
@@ -1644,14 +1648,23 @@ ixgbe_rx_fill_from_stage(struct ixgbe_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 			 uint16_t nb_pkts)
 {
 	struct rte_mbuf **stage = &rxq->rx_stage[rxq->rx_next_avail];
+	const struct rte_eth_dev *dev;
+	const struct ixgbe_vfta *vfta;
 	int i;
+
+	dev = &rte_eth_devices[rxq->port_id];
+	vfta = IXGBE_DEV_PRIVATE_TO_VFTA(dev->data->dev_private);
 
 	/* how many packets are ready to return? */
 	nb_pkts = (uint16_t)RTE_MIN(nb_pkts, rxq->rx_nb_avail);
 
 	/* copy mbuf pointers to the application's packet list */
-	for (i = 0; i < nb_pkts; ++i)
+	for (i = 0; i < nb_pkts; ++i) {
 		rx_pkts[i] = stage[i];
+		if (rxq->vf)
+			ixgbevf_trans_vlan_sw_filter_hdr(rx_pkts[i],
+							 vfta);
+	}
 
 	/* update internal queue state */
 	rxq->rx_nb_avail = (uint16_t)(rxq->rx_nb_avail - nb_pkts);
@@ -1771,6 +1784,8 @@ ixgbe_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	uint16_t nb_hold;
 	uint64_t pkt_flags;
 	uint64_t vlan_flags;
+	const struct rte_eth_dev *dev;
+	const struct ixgbe_vfta *vfta;
 
 	nb_rx = 0;
 	nb_hold = 0;
@@ -1779,6 +1794,9 @@ ixgbe_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	rx_ring = rxq->rx_ring;
 	sw_ring = rxq->sw_ring;
 	vlan_flags = rxq->vlan_flags;
+	dev = &rte_eth_devices[rxq->port_id];
+	vfta = IXGBE_DEV_PRIVATE_TO_VFTA(dev->data->dev_private);
+
 	while (nb_rx < nb_pkts) {
 		/*
 		 * The order of operations here is important as the DD status
@@ -1898,6 +1916,10 @@ ixgbe_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		rxm->packet_type =
 			ixgbe_rxd_pkt_info_to_pkt_type(pkt_info,
 						       rxq->pkt_type_mask);
+
+		if (rxq->vf)
+			ixgbevf_trans_vlan_sw_filter_hdr(rxm,
+							 vfta);
 
 		if (likely(pkt_flags & PKT_RX_RSS_HASH))
 			rxm->hash.rss = rte_le_to_cpu_32(
@@ -2040,6 +2062,11 @@ ixgbe_recv_pkts_lro(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts,
 	uint16_t nb_rx = 0;
 	uint16_t nb_hold = rxq->nb_rx_hold;
 	uint16_t prev_id = rxq->rx_tail;
+	const struct rte_eth_dev *dev;
+	const struct ixgbe_vfta *vfta;
+
+	dev = &rte_eth_devices[rxq->port_id];
+	vfta = IXGBE_DEV_PRIVATE_TO_VFTA(dev->data->dev_private);
 
 	while (nb_rx < nb_pkts) {
 		bool eop;
@@ -2253,6 +2280,10 @@ next_desc:
 		/* Prefetch data of first segment, if configured to do so. */
 		rte_packet_prefetch((char *)first_seg->buf_addr +
 			first_seg->data_off);
+
+		if (rxq->vf)
+			ixgbevf_trans_vlan_sw_filter_hdr(first_seg,
+							 vfta);
 
 		/*
 		 * Store the mbuf address into the next entry of the array
@@ -2607,7 +2638,8 @@ ixgbe_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	 */
 	if (nb_desc % IXGBE_TXD_ALIGN != 0 ||
 			(nb_desc > IXGBE_MAX_RING_DESC) ||
-			(nb_desc < IXGBE_MIN_RING_DESC)) {
+			(nb_desc < IXGBE_MIN_RING_DESC) ||
+			!rte_is_power_of_2(nb_desc)) {
 		return -EINVAL;
 	}
 
@@ -3216,6 +3248,25 @@ ixgbe_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	dev->data->rx_queues[queue_idx] = rxq;
 
 	ixgbe_reset_rx_queue(adapter, rxq);
+
+	return 0;
+}
+
+int __attribute__((cold))
+ixgbevf_dev_rx_queue_setup(struct rte_eth_dev *dev,
+			   uint16_t queue_idx,
+			   uint16_t nb_desc,
+			   unsigned int socket_id,
+			   const struct rte_eth_rxconf *rx_conf,
+			   struct rte_mempool *mp)
+{
+	struct ixgbe_rx_queue *rxq;
+
+	ixgbe_dev_rx_queue_setup(dev, queue_idx, nb_desc, socket_id,
+				 rx_conf, mp);
+
+	rxq = dev->data->rx_queues[queue_idx];
+	rxq->vf = true;
 
 	return 0;
 }
@@ -4761,7 +4812,7 @@ ixgbe_set_ivar(struct rte_eth_dev *dev, u8 entry, u8 vector, s8 type)
 }
 
 void __rte_cold
-ixgbe_set_rx_function(struct rte_eth_dev *dev)
+ixgbe_set_rx_function(struct rte_eth_dev *dev, bool vf)
 {
 	uint16_t i, rx_using_sse;
 	struct ixgbe_adapter *adapter = dev->data->dev_private;
@@ -4807,7 +4858,8 @@ ixgbe_set_rx_function(struct rte_eth_dev *dev)
 					    "callback (port=%d).",
 				     dev->data->port_id);
 
-			dev->rx_pkt_burst = ixgbe_recv_scattered_pkts_vec;
+			dev->rx_pkt_burst = vf ? ixgbevf_recv_scattered_pkts_vec :
+				ixgbe_recv_scattered_pkts_vec;
 		} else if (adapter->rx_bulk_alloc_allowed) {
 			PMD_INIT_LOG(DEBUG, "Using a Scattered with bulk "
 					   "allocation callback (port=%d).",
@@ -4836,7 +4888,8 @@ ixgbe_set_rx_function(struct rte_eth_dev *dev)
 			     RTE_IXGBE_DESCS_PER_LOOP,
 			     dev->data->port_id);
 
-		dev->rx_pkt_burst = ixgbe_recv_pkts_vec;
+		dev->rx_pkt_burst = vf ? ixgbevf_recv_pkts_vec :
+			ixgbe_recv_pkts_vec;
 	} else if (adapter->rx_bulk_alloc_allowed) {
 		PMD_INIT_LOG(DEBUG, "Rx Burst Bulk Alloc Preconditions are "
 				    "satisfied. Rx Burst Bulk Alloc function "
@@ -4857,7 +4910,9 @@ ixgbe_set_rx_function(struct rte_eth_dev *dev)
 
 	rx_using_sse =
 		(dev->rx_pkt_burst == ixgbe_recv_scattered_pkts_vec ||
-		dev->rx_pkt_burst == ixgbe_recv_pkts_vec);
+		 dev->rx_pkt_burst == ixgbe_recv_pkts_vec ||
+		 dev->rx_pkt_burst == ixgbevf_recv_scattered_pkts_vec ||
+		 dev->rx_pkt_burst == ixgbevf_recv_pkts_vec);
 
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
 		struct ixgbe_rx_queue *rxq = dev->data->rx_queues[i];
@@ -5179,7 +5234,7 @@ ixgbe_dev_rx_init(struct rte_eth_dev *dev)
 	if (rc)
 		return rc;
 
-	ixgbe_set_rx_function(dev);
+	ixgbe_set_rx_function(dev, false);
 
 	return 0;
 }
@@ -5730,7 +5785,7 @@ ixgbevf_dev_rx_init(struct rte_eth_dev *dev)
 		IXGBE_PSRTYPE_RQPL_SHIFT;
 	IXGBE_WRITE_REG(hw, IXGBE_VFPSRTYPE, psrtype);
 
-	ixgbe_set_rx_function(dev);
+	ixgbe_set_rx_function(dev, true);
 
 	return 0;
 }
@@ -5954,6 +6009,24 @@ ixgbe_rx_vec_dev_conf_condition_check(struct rte_eth_dev __rte_unused *dev)
 
 uint16_t
 ixgbe_recv_pkts_vec(
+	void __rte_unused *rx_queue,
+	struct rte_mbuf __rte_unused **rx_pkts,
+	uint16_t __rte_unused nb_pkts)
+{
+	return 0;
+}
+
+uint16_t __attribute__((weak))
+ixgbevf_recv_pkts_vec(
+	void __rte_unused *rx_queue,
+	struct rte_mbuf __rte_unused **rx_pkts,
+	uint16_t __rte_unused nb_pkts)
+{
+	return 0;
+}
+
+uint16_t __attribute__((weak))
+ixgbevf_recv_scattered_pkts_vec(
 	void __rte_unused *rx_queue,
 	struct rte_mbuf __rte_unused **rx_pkts,
 	uint16_t __rte_unused nb_pkts)

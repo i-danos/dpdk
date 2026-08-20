@@ -332,9 +332,10 @@ desc_to_ptype_v(__m128i descs[4], uint16_t pkt_type_mask,
  */
 static inline uint16_t
 _recv_raw_pkts_vec(struct ixgbe_rx_queue *rxq, struct rte_mbuf **rx_pkts,
-		uint16_t nb_pkts, uint8_t *split_packet)
+		   uint16_t nb_pkts, bool vf, uint8_t *split_packet)
 {
 	volatile union ixgbe_adv_rx_desc *rxdp;
+	const struct ixgbe_vfta *vfta = NULL;
 	struct ixgbe_rx_entry *sw_ring;
 	uint16_t nb_pkts_recd;
 #ifdef RTE_LIB_SECURITY
@@ -363,6 +364,12 @@ _recv_raw_pkts_vec(struct ixgbe_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 	__m128i mbuf_init;
 	uint8_t vlan_flags;
 	uint16_t udp_p_flag = 0; /* Rx Descriptor UDP header present */
+
+	if (vf) {
+		const struct rte_eth_dev *dev = &rte_eth_devices[rxq->port_id];
+
+		vfta = IXGBE_DEV_PRIVATE_TO_VFTA(dev->data->dev_private);
+	}
 
 	/* nb_pkts has to be floor-aligned to RTE_IXGBE_DESCS_PER_LOOP */
 	nb_pkts = RTE_ALIGN_FLOOR(nb_pkts, RTE_IXGBE_DESCS_PER_LOOP);
@@ -505,6 +512,17 @@ _recv_raw_pkts_vec(struct ixgbe_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 		desc_to_olflags_v(descs, mbuf_init, vlan_flags, udp_p_flag,
 				  &rx_pkts[pos]);
 
+#define STATUS_ERROR_OF(desc_ptr) (((union ixgbe_adv_rx_desc*)(void *)desc_ptr)->wb.upper.status_error)
+
+		if (STATUS_ERROR_OF(&descs[0]) & (1 << IXGBE_RXDADV_ERR_RXE_BIT))
+			rx_pkts[pos]->ol_flags |= PKT_RX_RXE_SBP_BAD;
+		if (STATUS_ERROR_OF(&descs[1]) & (1 << IXGBE_RXDADV_ERR_RXE_BIT))
+			rx_pkts[pos+1]->ol_flags |= PKT_RX_RXE_SBP_BAD;
+		if (STATUS_ERROR_OF(&descs[2]) & (1 << IXGBE_RXDADV_ERR_RXE_BIT))
+			rx_pkts[pos+2]->ol_flags |= PKT_RX_RXE_SBP_BAD;
+		if (STATUS_ERROR_OF(&descs[3]) & (1 << IXGBE_RXDADV_ERR_RXE_BIT))
+			rx_pkts[pos+3]->ol_flags |= PKT_RX_RXE_SBP_BAD;
+
 #ifdef RTE_LIB_SECURITY
 		if (unlikely(use_ipsec))
 			desc_to_olflags_v_ipsec(descs, &rx_pkts[pos]);
@@ -521,8 +539,15 @@ _recv_raw_pkts_vec(struct ixgbe_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 		/* D.3 copy final 3,4 data to rx_pkts */
 		_mm_storeu_si128((void *)&rx_pkts[pos+3]->rx_descriptor_fields1,
 				pkt_mb4);
+		if (vf)
+			ixgbevf_trans_vlan_sw_filter_hdr(rx_pkts[pos + 3],
+							 vfta);
+
 		_mm_storeu_si128((void *)&rx_pkts[pos+2]->rx_descriptor_fields1,
 				pkt_mb3);
+		if (vf)
+			ixgbevf_trans_vlan_sw_filter_hdr(rx_pkts[pos + 2],
+							 vfta);
 
 		/* D.2 pkt 1,2 set in_port/nb_seg and remove crc */
 		pkt_mb2 = _mm_add_epi16(pkt_mb2, crc_adjust);
@@ -557,8 +582,15 @@ _recv_raw_pkts_vec(struct ixgbe_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 		/* D.3 copy final 1,2 data to rx_pkts */
 		_mm_storeu_si128((void *)&rx_pkts[pos+1]->rx_descriptor_fields1,
 				pkt_mb2);
+		if (vf)
+			ixgbevf_trans_vlan_sw_filter_hdr(rx_pkts[pos + 1],
+							 vfta);
+
 		_mm_storeu_si128((void *)&rx_pkts[pos]->rx_descriptor_fields1,
 				pkt_mb1);
+		if (vf)
+			ixgbevf_trans_vlan_sw_filter_hdr(rx_pkts[pos],
+							 vfta);
 
 		desc_to_ptype_v(descs, rxq->pkt_type_mask, &rx_pkts[pos]);
 
@@ -588,26 +620,26 @@ uint16_t
 ixgbe_recv_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
 		uint16_t nb_pkts)
 {
-	return _recv_raw_pkts_vec(rx_queue, rx_pkts, nb_pkts, NULL);
+	return _recv_raw_pkts_vec(rx_queue, rx_pkts, nb_pkts, false, NULL);
 }
 
 /**
- * vPMD receive routine that reassembles scattered packets
+ * vPMD raw routine that reassembles scattered packets
  *
  * Notice:
  * - nb_pkts < RTE_IXGBE_DESCS_PER_LOOP, just return no packet
  * - floor align nb_pkts to a RTE_IXGBE_DESC_PER_LOOP power-of-two
  */
-static uint16_t
-ixgbe_recv_scattered_burst_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
-			       uint16_t nb_pkts)
+static inline uint16_t
+_recv_raw_scattered_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
+			     uint16_t nb_pkts, bool vf)
 {
 	struct ixgbe_rx_queue *rxq = rx_queue;
 	uint8_t split_flags[RTE_IXGBE_MAX_RX_BURST] = {0};
 
 	/* get some new buffers */
 	uint16_t nb_bufs = _recv_raw_pkts_vec(rxq, rx_pkts, nb_pkts,
-			split_flags);
+					      vf, split_flags);
 	if (nb_bufs == 0)
 		return 0;
 
@@ -632,30 +664,52 @@ ixgbe_recv_scattered_burst_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
 		&split_flags[i]);
 }
 
-/**
- * vPMD receive routine that reassembles scattered packets.
+/*
+ * vPMD receive routine that reassembles scattered packets
+ *
+ * Notice:
+ * - nb_pkts < RTE_IXGBE_DESCS_PER_LOOP, just return no packet
+ * - nb_pkts > RTE_IXGBE_MAX_RX_BURST, only scan RTE_IXGBE_MAX_RX_BURST
+ *   numbers of DD bit
+ * - floor align nb_pkts to a RTE_IXGBE_DESC_PER_LOOP power-of-two
  */
 uint16_t
 ixgbe_recv_scattered_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
 			      uint16_t nb_pkts)
 {
-	uint16_t retval = 0;
+	return _recv_raw_scattered_pkts_vec(rx_queue, rx_pkts, nb_pkts, false);
+}
 
-	while (nb_pkts > RTE_IXGBE_MAX_RX_BURST) {
-		uint16_t burst;
+/*
+ * vPMD VF receive routine, only accept(nb_pkts >= RTE_IXGBE_DESCS_PER_LOOP)
+ *
+ * Notice:
+ * - nb_pkts < RTE_IXGBE_DESCS_PER_LOOP, just return no packet
+ * - nb_pkts > RTE_IXGBE_MAX_RX_BURST, only scan RTE_IXGBE_MAX_RX_BURST
+ *   numbers of DD bit
+ * - floor align nb_pkts to a RTE_IXGBE_DESC_PER_LOOP power-of-two
+ */
+uint16_t
+ixgbevf_recv_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
+		      uint16_t nb_pkts)
+{
+	return _recv_raw_pkts_vec(rx_queue, rx_pkts, nb_pkts, true, NULL);
+}
 
-		burst = ixgbe_recv_scattered_burst_vec(rx_queue,
-						       rx_pkts + retval,
-						       RTE_IXGBE_MAX_RX_BURST);
-		retval += burst;
-		nb_pkts -= burst;
-		if (burst < RTE_IXGBE_MAX_RX_BURST)
-			return retval;
-	}
-
-	return retval + ixgbe_recv_scattered_burst_vec(rx_queue,
-						       rx_pkts + retval,
-						       nb_pkts);
+/*
+ * vPMD VF receive routine that reassembles scattered packets
+ *
+ * Notice:
+ * - nb_pkts < RTE_IXGBE_DESCS_PER_LOOP, just return no packet
+ * - nb_pkts > RTE_IXGBE_MAX_RX_BURST, only scan RTE_IXGBE_MAX_RX_BURST
+ *   numbers of DD bit
+ * - floor align nb_pkts to a RTE_IXGBE_DESC_PER_LOOP power-of-two
+ */
+uint16_t
+ixgbevf_recv_scattered_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
+				uint16_t nb_pkts)
+{
+	return _recv_raw_scattered_pkts_vec(rx_queue, rx_pkts, nb_pkts, true);
 }
 
 static inline void

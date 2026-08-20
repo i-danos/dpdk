@@ -52,7 +52,7 @@ mlx5_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *stats,
 			return stats_n;
 		if (xstats_ctrl->stats_n != stats_n)
 			mlx5_os_stats_init(dev);
-		ret = mlx5_os_read_dev_counters(dev, counters);
+		ret = mlx5_os_read_dev_counters(dev, counters, mlx5_stats_n);
 		if (ret)
 			return ret;
 		for (i = 0; i != mlx5_stats_n; ++i) {
@@ -238,7 +238,7 @@ mlx5_xstats_reset(struct rte_eth_dev *dev)
 		rte_errno = ENOMEM;
 		return -rte_errno;
 	}
-	ret = mlx5_os_read_dev_counters(dev, counters);
+	ret = mlx5_os_read_dev_counters(dev, counters, xstats_ctrl->stats_n);
 	if (ret) {
 		DRV_LOG(ERR, "port %u cannot read device counters: %s",
 			dev->data->port_id, strerror(rte_errno));

@@ -3,6 +3,7 @@
  */
 
 #include <rte_acl.h>
+#include <rte_rcu_qsbr.h>
 #include "acl.h"
 
 #define	QRANGE_MIN	((uint8_t)INT8_MIN)
@@ -52,7 +53,7 @@ acl_gen_log_stats(const struct rte_acl_ctx *ctx,
 		indices->dfa_index * sizeof(uint64_t),
 		counts->match,
 		counts->match * sizeof(struct rte_acl_match_results),
-		ctx->mem_sz,
+		ctx->rcx->mem_sz,
 		max_size);
 }
 
@@ -441,6 +442,23 @@ acl_calc_counts_indices(struct acl_node_counters *counts,
 	indices->match_index = 1;
 }
 
+void
+rte_acl_rcu_qsbr_free_rcx(void *p, void *e, unsigned int n)
+{
+	struct rte_acl_rcu_dq_entry rcu_dq_entry =
+		*((struct rte_acl_rcu_dq_entry *)e);
+	RTE_SET_USED(p);
+	RTE_SET_USED(n);
+
+	struct rte_acl_rt_ctx *rcx = rcu_dq_entry.rcx;
+
+	if (!rcx)
+		return;
+
+	rte_free(rcx->mem);
+	rte_free(rcx);
+}
+
 /*
  * Generate the runtime structure using build structure
  */
@@ -456,6 +474,8 @@ rte_acl_gen(struct rte_acl_ctx *ctx, struct rte_acl_trie *trie,
 	struct rte_acl_match_results *match;
 	struct acl_node_counters counts;
 	struct rte_acl_indices indices;
+	struct rte_acl_rt_ctx *rcx, *prev_rcx = ctx->rcx;
+	struct rte_acl_rcu_dq_entry rcu_dq_entry;
 
 	no_match = RTE_ACL_NODE_MATCH;
 
@@ -483,6 +503,15 @@ rte_acl_gen(struct rte_acl_ctx *ctx, struct rte_acl_trie *trie,
 		RTE_LOG(ERR, ACL,
 			"allocation of %zu bytes on socket %d for %s failed\n",
 			total_size, ctx->socket_id, ctx->name);
+		return -ENOMEM;
+	}
+
+	rcx = rte_zmalloc_socket("ACL_RT_CTX", sizeof(struct rte_acl_rt_ctx),
+				  RTE_CACHE_LINE_SIZE, ctx->socket_id);
+	if (rcx == NULL) {
+		RTE_LOG(ERR, ACL,
+			"allocation of runtime ACL ctx on socket %d for %s failed\n",
+			ctx->socket_id, ctx->name);
 		return -ENOMEM;
 	}
 
@@ -516,16 +545,42 @@ rte_acl_gen(struct rte_acl_ctx *ctx, struct rte_acl_trie *trie,
 			trie[n].root_index = node_bld_trie[n].trie->node_index;
 	}
 
-	ctx->mem = mem;
-	ctx->mem_sz = total_size;
-	ctx->data_indexes = mem;
-	ctx->num_tries = num_tries;
 	ctx->num_categories = num_categories;
-	ctx->match_index = match_index;
-	ctx->no_match = no_match;
-	ctx->idle = node_array[RTE_ACL_DFA_SIZE];
-	ctx->trans_table = node_array;
-	memcpy(ctx->trie, trie, sizeof(ctx->trie));
+
+	rcx->mem = mem;
+	rcx->mem_sz = total_size;
+	rcx->data_indexes = mem;
+	rcx->num_tries = num_tries;
+	rcx->match_index = match_index;
+	rcx->no_match = no_match;
+	rcx->idle = node_array[RTE_ACL_DFA_SIZE];
+	rcx->trans_table = node_array;
+	memcpy(rcx->trie, trie, sizeof(rcx->trie));
+
+	/* back pointer to acx/rte_acl_ctx */
+	rcx->acx = ctx;
+
+	__atomic_store_n(&ctx->rcx, rcx, __ATOMIC_RELAXED);
+
+	if (prev_rcx) {
+		if (ctx->rcu_mode == RTE_ACL_QSBR_MODE_SYNC) {
+			/* Wait until the active runtime context is unused. */
+			rte_rcu_qsbr_synchronize(ctx->v, ctx->rcu_thread_id);
+			rte_free(prev_rcx);
+		} else if (ctx->rcu_mode == RTE_ACL_QSBR_MODE_DQ) {
+			/* Push into QSBR FIFO */
+			rcu_dq_entry.rcx = prev_rcx;
+			if (rte_rcu_qsbr_dq_enqueue(ctx->dq, &rcu_dq_entry) != 0) {
+				RTE_LOG(ERR, ACL, "Pushing to DQ failed: %s\n",
+					rte_strerror(rte_errno));
+				return -rte_errno;
+			}
+
+		} else {
+			RTE_LOG(ERR, ACL, "unsupported RCU mode\n");
+			return -EINVAL;
+		}
+	}
 
 	acl_gen_log_stats(ctx, &counts, &indices, max_size);
 	return 0;

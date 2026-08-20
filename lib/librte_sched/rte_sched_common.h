@@ -14,6 +14,12 @@ extern "C" {
 
 #define __rte_aligned_16 __rte_aligned(16)
 
+static inline uint32_t
+rte_sched_min_val_2_u32(uint32_t x, uint32_t y)
+{
+	return (x < y)? x : y;
+}
+
 #if 0
 static inline uint32_t
 rte_min_pos_4_u16(uint16_t *x)
@@ -42,6 +48,37 @@ rte_min_pos_4_u16(uint16_t *x)
 	return pos0;
 }
 
+static inline uint32_t
+rte_min_pos_4_u32(uint32_t *x)
+{
+	uint32_t pos0 = 0;
+	uint32_t pos1 = 2;
+
+	if (x[1] <= x[0])
+		pos0 = 1;
+	if (x[3] <= x[2])
+		pos1 = 3;
+	if (x[pos1] <= x[pos0])
+		pos0 = pos1;
+
+	return pos0;
+}
+
+static inline uint32_t
+rte_min_pos_n_u32(uint32_t *x, uint32_t n)
+{
+	uint32_t index;
+	uint32_t min_index = 0;
+	uint32_t min_value = UINT32_MAX;
+
+	for (index = 0; index < n; index++) {
+		if (x[index] < min_value) {
+			min_value = x[index];
+			min_index = index;
+		}
+	}
+	return min_index;
+}
 #endif
 
 /*

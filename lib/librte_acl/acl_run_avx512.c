@@ -19,13 +19,13 @@ struct acl_flow_avx512 {
 };
 
 static inline void
-acl_set_flow_avx512(struct acl_flow_avx512 *flow, const struct rte_acl_ctx *ctx,
+acl_set_flow_avx512(struct acl_flow_avx512 *flow, const struct rte_acl_rt_ctx *ctx,
 	uint32_t trie, const uint8_t *data[], uint32_t *matches,
 	uint32_t total_packets)
 {
 	flow->num_packets = 0;
 	flow->total_packets = total_packets;
-	flow->first_load_sz = ctx->first_load_sz;
+	flow->first_load_sz = ctx->acx->first_load_sz;
 	flow->root_index = ctx->trie[trie].root_index;
 	flow->trans = ctx->trans_table;
 	flow->data_index = ctx->trie[trie].data_index;
@@ -110,10 +110,11 @@ resolve_mcle8_avx512x1(uint32_t result[],
 #include "acl_run_avx512x8.h"
 
 int
-rte_acl_classify_avx512x16(const struct rte_acl_ctx *ctx, const uint8_t **data,
+rte_acl_classify_avx512x16(const struct rte_acl_ctx *acx, const uint8_t **data,
 	uint32_t *results, uint32_t num, uint32_t categories)
 {
 	const uint32_t max_iter = MAX_SEARCHES_AVX16 * MAX_SEARCHES_AVX16;
+	struct rte_acl_rt_ctx *ctx = acx->rcx;
 
 	/* split huge lookup (gt 256) into series of fixed size ones */
 	while (num > max_iter) {
@@ -131,16 +132,17 @@ rte_acl_classify_avx512x16(const struct rte_acl_ctx *ctx, const uint8_t **data,
 	if (num >= MAX_SEARCHES_SSE4)
 		return search_sse_4(ctx, data, results, num, categories);
 
-	return rte_acl_classify_scalar(ctx, data, results, num, categories);
+	return rte_acl_classify_scalar(acx, data, results, num, categories);
 }
 
 #include "acl_run_avx512x16.h"
 
 int
-rte_acl_classify_avx512x32(const struct rte_acl_ctx *ctx, const uint8_t **data,
+rte_acl_classify_avx512x32(const struct rte_acl_ctx *acx, const uint8_t **data,
 	uint32_t *results, uint32_t num, uint32_t categories)
 {
 	const uint32_t max_iter = MAX_SEARCHES_AVX16 * MAX_SEARCHES_AVX16;
+	struct rte_acl_rt_ctx *ctx = acx->rcx;
 
 	/* split huge lookup (gt 256) into series of fixed size ones */
 	while (num > max_iter) {
@@ -160,5 +162,5 @@ rte_acl_classify_avx512x32(const struct rte_acl_ctx *ctx, const uint8_t **data,
 	if (num >= MAX_SEARCHES_SSE4)
 		return search_sse_4(ctx, data, results, num, categories);
 
-	return rte_acl_classify_scalar(ctx, data, results, num, categories);
+	return rte_acl_classify_scalar(acx, data, results, num, categories);
 }

@@ -17,15 +17,18 @@ extern "C" {
  ***/
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <limits.h>
 #include <rte_common.h>
 #include <rte_debug.h>
 #include <rte_cycles.h>
 #include <rte_branch_prediction.h>
 
-#define RTE_RED_SCALING                     10         /**< Fraction size for fixed-point */
+#define RTE_RED_SCALING_DEFAULT             10         /**< Fraction size for fixed-point */
 #define RTE_RED_S                           (1 << 22)  /**< Packet size multiplied by number of leaf queues */
-#define RTE_RED_MAX_TH_MAX                  1023       /**< Max threshold limit in fixed point format */
+#define RTE_RED_DEFAULT_QUEUE_LENGTH        1024       /**< Default Max RED queue length */
+#define RTE_RED_MIN_QUEUE_LENGTH            64
+#define RTE_RED_MAX_QUEUE_LENGTH            8192
 #define RTE_RED_WQ_LOG2_MIN                 1          /**< Min inverse filter weight value */
 #define RTE_RED_WQ_LOG2_MAX                 12         /**< Max inverse filter weight value */
 #define RTE_RED_MAXP_INV_MIN                1          /**< Min inverse mark probability value */
@@ -42,6 +45,8 @@ extern uint32_t rte_red_rand_val;
 extern uint32_t rte_red_rand_seed;
 extern uint16_t rte_red_log2_1_minus_Wq[RTE_RED_WQ_LOG2_NUM];
 extern uint16_t rte_red_pow2_frac_inv[16];
+extern uint8_t rte_red_scaling;
+extern uint16_t rte_red_max_threshold;
 
 /**
  * RED configuration parameters passed by user
@@ -66,6 +71,32 @@ struct rte_red_config {
 };
 
 /**
+ * Per queue red parameters
+ */
+#define RTE_NUM_DSCP_MAPS	4
+#define RTE_MAX_DSCP_MAPS	(RTE_NUM_DSCP_MAPS - 1)
+
+struct rte_red_q_params {
+	uint64_t	dscp_set[RTE_NUM_DSCP_MAPS];
+	struct rte_red_params qparams[RTE_NUM_DSCP_MAPS];
+	char		*grp_names[RTE_NUM_DSCP_MAPS];
+	uint8_t		num_maps;
+};
+
+struct rte_red_pipe_params {
+	SLIST_ENTRY(rte_red_pipe_params) list;
+	struct rte_red_q_params red_q_params;
+	uint32_t	qindex;
+	bool		alloced;
+};
+
+struct rte_red_q_config {
+	uint64_t	dscp_set[RTE_NUM_DSCP_MAPS];
+	struct rte_red_config qcfg[RTE_NUM_DSCP_MAPS];
+	uint8_t		num_maps;
+};
+
+/**
  * RED run-time data
  */
 struct rte_red {
@@ -73,6 +104,8 @@ struct rte_red {
 	uint32_t count;    /**< Number of packets since last marked packet (count) */
 	uint64_t q_time;   /**< Start of the queue idle time (q_time) */
 };
+
+struct rte_sched_port;
 
 /**
  * @brief Initialises run-time data
@@ -106,6 +139,26 @@ rte_red_config_init(struct rte_red_config *red_cfg,
 	const uint16_t min_th,
 	const uint16_t max_th,
 	const uint16_t maxp_inv);
+
+/**
+ * @brief Configures the global setting for the RED scaling factor
+ *
+ * @param max_red_queue_length [in] must be a power of two
+ *
+ * @return Operation status
+ * @retval 0 success
+ * @retval !0 error
+ */
+int
+rte_red_set_scaling(uint16_t max_red_queue_length);
+
+/**
+ * @brief Reset the RED scaling factor - only for use by RED unit-tests
+ *
+ * @return Operation status
+ */
+void
+rte_red_reset_scaling(void);
 
 /**
  * @brief Generate random number for RED
@@ -177,7 +230,7 @@ __rte_red_calc_qempty_factor(uint8_t wq_log2, uint16_t m)
 	f = (n >> 6) & 0xf;
 	n >>= 10;
 
-	if (n < RTE_RED_SCALING)
+	if (n < rte_red_scaling)
 		return (uint16_t) ((rte_red_pow2_frac_inv[f] + (1 << (n - 1))) >> n);
 
 	return 0;
@@ -229,7 +282,7 @@ rte_red_enqueue_empty(const struct rte_red_config *red_cfg,
 	if (m >= RTE_RED_2POW16) {
 		red->avg = 0;
 	} else {
-		red->avg = (red->avg >> RTE_RED_SCALING) * __rte_red_calc_qempty_factor(red_cfg->wq_log2, (uint16_t) m);
+		red->avg = (red->avg >> rte_red_scaling) * __rte_red_calc_qempty_factor(red_cfg->wq_log2, (uint16_t) m);
 	}
 
 	return 0;
@@ -336,7 +389,7 @@ rte_red_enqueue_nonempty(const struct rte_red_config *red_cfg,
 	*/
 
 	/* avg update */
-	red->avg += (q << RTE_RED_SCALING) - (red->avg >> red_cfg->wq_log2);
+	red->avg += (q << rte_red_scaling) - (red->avg >> red_cfg->wq_log2);
 
 	/* avg < min_th: do not mark the packet  */
 	if (red->avg < red_cfg->min_th) {
@@ -403,6 +456,30 @@ rte_red_mark_queue_empty(struct rte_red *red, const uint64_t time)
 {
 	red->q_time = time;
 }
+
+/**
+ * @brief Return the number of dscp maps configured
+ *
+ * @return The number of maps configured
+ * @retval -1 invalid map lookup
+ * @param port [in] pointer to the port
+ * @param queue_id [in] queue index in the port
+ */
+int rte_red_queue_num_maps(struct rte_sched_port *port, uint32_t queue_id);
+
+struct rte_sched_pipe_params;
+
+/**
+ * @brief Copy a wred_map structure to be used for another queue
+ *
+ * @return Pointer to new map
+ * @param p_profs pointer to the profile
+ * @param orig pointer to structure to be copied
+ * @param qindex queue index in subport
+ */
+struct rte_red_pipe_params *
+rte_red_copy_params(struct rte_sched_pipe_params *p_profs,
+		    const struct rte_red_pipe_params *orig, uint32_t qindex);
 
 #ifdef __cplusplus
 }

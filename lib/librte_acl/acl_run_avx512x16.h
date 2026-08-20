@@ -290,7 +290,7 @@ resolve_mcgt8_avx512x1(uint32_t result[],
  * Use two sets of metadata, each serves 16 flows max.
  */
 static inline int
-search_avx512x16x2(const struct rte_acl_ctx *ctx, const uint8_t **data,
+search_avx512x16x2(const struct rte_acl_rt_ctx *ctx, const uint8_t **data,
 	uint32_t *results, uint32_t total_packets, uint32_t categories)
 {
 	uint32_t i, *pm;

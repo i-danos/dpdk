@@ -109,4 +109,6 @@ EXPERIMENTAL {
 	rte_cryptodev_raw_enqueue;
 	rte_cryptodev_raw_enqueue_burst;
 	rte_cryptodev_raw_enqueue_done;
+	rte_cryptodev_sym_session_pool_create_empty;
+	__rte_cryptodev_trace_sym_session_pool_create_empty;
 };

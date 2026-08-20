@@ -134,7 +134,8 @@ static const struct ena_stats ena_stats_rx_strings[] = {
 #define QUEUE_OFFLOADS (DEV_TX_OFFLOAD_TCP_CKSUM |\
 			DEV_TX_OFFLOAD_UDP_CKSUM |\
 			DEV_TX_OFFLOAD_IPV4_CKSUM |\
-			DEV_TX_OFFLOAD_TCP_TSO)
+			DEV_TX_OFFLOAD_TCP_TSO |\
+			DEV_TX_OFFLOAD_MULTI_SEGS)
 #define MBUF_OFFLOADS (PKT_TX_L4_MASK |\
 		       PKT_TX_IP_CKSUM |\
 		       PKT_TX_TCP_SEG)
@@ -2030,6 +2031,8 @@ static int ena_infos_get(struct rte_eth_dev *dev,
 		tx_feat |= DEV_TX_OFFLOAD_IPV4_CKSUM |
 			DEV_TX_OFFLOAD_UDP_CKSUM |
 			DEV_TX_OFFLOAD_TCP_CKSUM;
+
+	tx_feat |= DEV_TX_OFFLOAD_MULTI_SEGS;
 
 	if (adapter->offloads.rx_csum_supported)
 		rx_feat |= DEV_RX_OFFLOAD_IPV4_CKSUM |

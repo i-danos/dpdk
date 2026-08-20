@@ -24,6 +24,9 @@ RTE_TRACE_POINT_REGISTER(rte_cryptodev_trace_queue_pair_setup,
 RTE_TRACE_POINT_REGISTER(rte_cryptodev_trace_sym_session_pool_create,
 	lib.cryptodev.sym.pool.create)
 
+RTE_TRACE_POINT_REGISTER(rte_cryptodev_trace_sym_session_pool_create_empty,
+	lib.cryptodev.sym.pool.create_empty)
+
 RTE_TRACE_POINT_REGISTER(rte_cryptodev_trace_sym_session_create,
 	lib.cryptodev.sym.create)
 

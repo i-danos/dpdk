@@ -120,6 +120,9 @@ extern "C" {
 /** RX IEEE1588 L2/L4 timestamped packet.*/
 #define PKT_RX_IEEE1588_TMST (1ULL << 10)
 
+/** RX BAD PACKET FORCED SAVED VIA NIC FEATURE */
+#define PKT_RX_RXE_SBP_BAD   (1ULL << 11)
+
 /** FD id reported if FDIR match. */
 #define PKT_RX_FDIR_ID       (1ULL << 13)
 

@@ -717,7 +717,7 @@ __eth_bond_slave_remove_lock_free(uint16_t bonded_port_id,
 					sizeof(*(rte_eth_devices[bonded_port_id].data->mac_addrs)));
 	}
 	if (internals->slave_count == 0) {
-		internals->rx_offload_capa = 0;
+		internals->rx_offload_capa = DEV_RX_OFFLOAD_VLAN_FILTER;
 		internals->tx_offload_capa = 0;
 		internals->rx_queue_offload_capa = 0;
 		internals->tx_queue_offload_capa = 0;

@@ -271,6 +271,23 @@ bond_ethdev_8023ad_flow_set(struct rte_eth_dev *bond_dev, uint16_t slave_port) {
 	return 0;
 }
 
+static uint8_t
+bond_mac_matches_config_mac(const struct rte_ether_addr *addrs, const struct rte_ether_addr *dst_addr)
+{
+	unsigned int i;
+
+	for (i = 0; i < BOND_MAX_MAC_ADDRS; i++) {
+		const struct rte_ether_addr *addr = addrs + i;
+
+		if (rte_is_zero_ether_addr(addr))
+			continue;
+
+		if (rte_is_same_ether_addr(dst_addr, addr))
+			return 1;
+	}
+	return 0;
+}
+
 static inline uint16_t
 rx_burst_8023ad(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts,
 		bool dedicated_rxq)
@@ -343,7 +360,7 @@ rx_burst_8023ad(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts,
 				!collecting ||
 				(!promisc &&
 				 ((rte_is_unicast_ether_addr(&hdr->d_addr) &&
-				   !rte_is_same_ether_addr(bond_mac,
+				   !bond_mac_matches_config_mac(bond_mac,
 						       &hdr->d_addr)) ||
 				  (!allmulti &&
 				   rte_is_multicast_ether_addr(&hdr->d_addr)))))) {
@@ -1690,6 +1707,7 @@ slave_configure(struct rte_eth_dev *bonded_eth_dev,
 	int errval;
 	uint16_t q_id;
 	struct rte_flow_error flow_error;
+	struct rte_eth_dev_info slave_info;
 
 	struct bond_dev_private *internals = bonded_eth_dev->data->dev_private;
 
@@ -1699,12 +1717,9 @@ slave_configure(struct rte_eth_dev *bonded_eth_dev,
 		RTE_BOND_LOG(ERR, "rte_eth_dev_stop: port %u, err (%d)",
 			     slave_eth_dev->data->port_id, errval);
 
-	/* Enable interrupts on slave device if supported */
-	if (slave_eth_dev->data->dev_flags & RTE_ETH_DEV_INTR_LSC)
-		slave_eth_dev->data->dev_conf.intr_conf.lsc = 1;
-
 	/* If RSS is enabled for bonding, try to enable it for slaves  */
-	if (bonded_eth_dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG) {
+	if (bonded_eth_dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG &&
+	    slave_eth_dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG) {
 		if (internals->rss_key_len != 0) {
 			slave_eth_dev->data->dev_conf.rx_adv_conf.rss_conf.rss_key_len =
 					internals->rss_key_len;
@@ -1718,15 +1733,22 @@ slave_configure(struct rte_eth_dev *bonded_eth_dev,
 				bonded_eth_dev->data->dev_conf.rx_adv_conf.rss_conf.rss_hf;
 		slave_eth_dev->data->dev_conf.rxmode.mq_mode =
 				bonded_eth_dev->data->dev_conf.rxmode.mq_mode;
-	}
+	} else
+		bonded_eth_dev->data->dev_conf.rxmode.mq_mode = ETH_MQ_RX_NONE;
 
-	if (bonded_eth_dev->data->dev_conf.rxmode.offloads &
-			DEV_RX_OFFLOAD_VLAN_FILTER)
+	rte_eth_dev_info_get(slave_eth_dev->data->port_id, &slave_info);
+
+	if ((bonded_eth_dev->data->dev_conf.rxmode.offloads &
+	     DEV_RX_OFFLOAD_VLAN_FILTER) &&
+            (slave_info.rx_offload_capa & DEV_RX_OFFLOAD_VLAN_FILTER)) {
 		slave_eth_dev->data->dev_conf.rxmode.offloads |=
 				DEV_RX_OFFLOAD_VLAN_FILTER;
-	else
+	} else {
+		bonded_eth_dev->data->dev_conf.rxmode.offloads &=
+				~DEV_RX_OFFLOAD_VLAN_FILTER;
 		slave_eth_dev->data->dev_conf.rxmode.offloads &=
 				~DEV_RX_OFFLOAD_VLAN_FILTER;
+	}
 
 	nb_rx_queues = bonded_eth_dev->data->nb_rx_queues;
 	nb_tx_queues = bonded_eth_dev->data->nb_tx_queues;
@@ -1844,7 +1866,7 @@ slave_configure(struct rte_eth_dev *bonded_eth_dev,
 	}
 
 	/* If lsc interrupt is set, check initial slave's link status */
-	if (slave_eth_dev->data->dev_flags & RTE_ETH_DEV_INTR_LSC) {
+	if (slave_eth_dev->data->dev_conf.intr_conf.lsc) {
 		slave_eth_dev->dev_ops->link_update(slave_eth_dev, 0);
 		bond_ethdev_lsc_event_callback(slave_eth_dev->data->port_id,
 			RTE_ETH_EVENT_INTR_LSC, &bonded_eth_dev->data->port_id,
@@ -1885,9 +1907,6 @@ slave_remove(struct bond_dev_private *internals,
 	rte_eth_dev_internal_reset(slave_eth_dev);
 }
 
-static void
-bond_ethdev_slave_link_status_change_monitor(void *cb_arg);
-
 void
 slave_add(struct bond_dev_private *internals,
 		struct rte_eth_dev *slave_eth_dev)
@@ -1901,7 +1920,7 @@ slave_add(struct bond_dev_private *internals,
 	/* Mark slave devices that don't support interrupts so we can
 	 * compensate when we start the bond
 	 */
-	if (!(slave_eth_dev->data->dev_flags & RTE_ETH_DEV_INTR_LSC)) {
+	if (!slave_eth_dev->data->dev_conf.intr_conf.lsc) {
 		slave_details->link_status_poll_enabled = 1;
 	}
 
@@ -2089,16 +2108,17 @@ bond_ethdev_stop(struct rte_eth_dev *eth_dev)
 	internals->link_status_polling_enabled = 0;
 	for (i = 0; i < internals->slave_count; i++) {
 		uint16_t slave_id = internals->slaves[i].port_id;
+		internals->slaves[i].last_link_status = 0;
+		ret = rte_eth_dev_stop(slave_id);
+		if (ret != 0) {
+			RTE_BOND_LOG(ERR, "Failed to stop device on port %u",
+				     slave_id);
+			return ret;
+		}
 		if (find_slave_by_id(internals->active_slaves,
 				internals->active_slave_count, slave_id) !=
 						internals->active_slave_count) {
 			internals->slaves[i].last_link_status = 0;
-			ret = rte_eth_dev_stop(slave_id);
-			if (ret != 0) {
-				RTE_BOND_LOG(ERR, "Failed to stop device on port %u",
-					     slave_id);
-				return ret;
-			}
 			deactivate_slave(eth_dev, slave_id);
 		}
 	}
@@ -2111,28 +2131,26 @@ bond_ethdev_close(struct rte_eth_dev *dev)
 {
 	struct bond_dev_private *internals = dev->data->dev_private;
 	uint16_t bond_port_id = internals->port_id;
-	int skipped = 0;
+	int slave_id;
 	struct rte_flow_error ferror;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
 
 	RTE_BOND_LOG(INFO, "Closing bonded device %s", dev->device->name);
-	while (internals->slave_count != skipped) {
-		uint16_t port_id = internals->slaves[skipped].port_id;
+	for (slave_id = 0; slave_id < internals->slave_count; slave_id++) {
+		uint16_t port_id = internals->slaves[slave_id].port_id;
 
 		if (rte_eth_dev_stop(port_id) != 0) {
 			RTE_BOND_LOG(ERR, "Failed to stop device on port %u",
 				     port_id);
-			skipped++;
+			continue;
 		}
 
-		if (rte_eth_bond_slave_remove(bond_port_id, port_id) != 0) {
+		if (rte_eth_bond_slave_remove(bond_port_id, port_id) != 0)
 			RTE_BOND_LOG(ERR,
 				     "Failed to remove port %d from bonded device %s",
 				     port_id, dev->device->name);
-			skipped++;
-		}
 	}
 	bond_flow_ops.flush(dev, &ferror);
 	bond_ethdev_free_queues(dev);
@@ -2332,7 +2350,7 @@ bond_ethdev_tx_queue_release(void *queue)
 	rte_free(queue);
 }
 
-static void
+void
 bond_ethdev_slave_link_status_change_monitor(void *cb_arg)
 {
 	struct rte_eth_dev *bonded_ethdev, *slave_ethdev;
@@ -2369,10 +2387,11 @@ bond_ethdev_slave_link_status_change_monitor(void *cb_arg)
 			(*slave_ethdev->dev_ops->link_update)(slave_ethdev,
 					internals->slaves[i].link_status_wait_to_complete);
 
-			/* if link status has changed since last checked then call lsc
-			 * event callback */
+			/* if link status has changed since last checked and bond dev is
+			 * started then call lsc event callback */
 			if (slave_ethdev->data->dev_link.link_status !=
-					internals->slaves[i].last_link_status) {
+					internals->slaves[i].last_link_status &&
+						bonded_ethdev->data->dev_started) {
 				internals->slaves[i].last_link_status =
 						slave_ethdev->data->dev_link.link_status;
 
@@ -3256,7 +3275,7 @@ bond_alloc(struct rte_vdev_device *dev, uint8_t mode)
 
 	internals->slave_count = 0;
 	internals->active_slave_count = 0;
-	internals->rx_offload_capa = 0;
+	internals->rx_offload_capa = DEV_RX_OFFLOAD_VLAN_FILTER;
 	internals->tx_offload_capa = 0;
 	internals->rx_queue_offload_capa = 0;
 	internals->tx_queue_offload_capa = 0;

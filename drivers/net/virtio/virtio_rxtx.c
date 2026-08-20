@@ -1755,6 +1755,10 @@ virtio_xmit_pkts_packed(void *tx_queue, struct rte_mbuf **tx_pkts,
 		virtio_xmit_cleanup_packed(vq, nb_pkts - vq->vq_free_cnt,
 					   in_order);
 
+#ifdef RTE_ETHDEV_TX_PREPARE_NOOP
+	nb_pkts = virtio_xmit_pkts_prepare(tx_queue, tx_pkts, nb_pkts);
+#endif
+
 	for (nb_tx = 0; nb_tx < nb_pkts; nb_tx++) {
 		struct rte_mbuf *txm = tx_pkts[nb_tx];
 		int can_push = 0, use_indirect = 0, slots, need;
@@ -1835,6 +1839,10 @@ virtio_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 	if (likely(nb_used > vq->vq_nentries - vq->vq_free_thresh))
 		virtio_xmit_cleanup(vq, nb_used);
+
+#ifdef RTE_ETHDEV_TX_PREPARE_NOOP
+	nb_pkts = virtio_xmit_pkts_prepare(tx_queue, tx_pkts, nb_pkts);
+#endif
 
 	for (nb_tx = 0; nb_tx < nb_pkts; nb_tx++) {
 		struct rte_mbuf *txm = tx_pkts[nb_tx];
@@ -1937,6 +1945,10 @@ virtio_xmit_pkts_inorder(void *tx_queue,
 
 	if (likely(nb_used > vq->vq_nentries - vq->vq_free_thresh))
 		virtio_xmit_cleanup_inorder(vq, nb_used);
+
+#ifdef RTE_ETHDEV_TX_PREPARE_NOOP
+	nb_pkts = virtio_xmit_pkts_prepare(tx_queue, tx_pkts, nb_pkts);
+#endif
 
 	for (nb_tx = 0; nb_tx < nb_pkts; nb_tx++) {
 		struct rte_mbuf *txm = tx_pkts[nb_tx];

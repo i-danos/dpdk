@@ -322,4 +322,6 @@ bond_ethdev_stop(struct rte_eth_dev *eth_dev);
 int
 bond_ethdev_close(struct rte_eth_dev *dev);
 
+void
+bond_ethdev_slave_link_status_change_monitor(void *cb_arg);
 #endif

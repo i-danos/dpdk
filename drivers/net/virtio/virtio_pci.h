@@ -247,7 +247,9 @@ struct virtio_hw {
 	struct virtnet_ctl *cvq;
 	uint64_t    req_guest_features;
 	uint64_t    guest_features;
+	uint64_t    extra_mac_addresses;
 	uint32_t    max_queue_pairs;
+	bool        promiscuous_enabled;
 	bool        started;
 	uint16_t	max_mtu;
 	uint16_t    vtnet_hdr_size;

@@ -5873,6 +5873,21 @@ i40e_vsi_setup(struct i40e_pf *pf,
 			goto fail_msix_alloc;
 		}
 
+		/* Disable source pruning. */
+		memset(&ctxt, 0, sizeof(ctxt));
+		ctxt.seid = vsi->seid;
+		ctxt.pf_num = hw->pf_id;
+		ctxt.vf_num = 0;
+		ctxt.info.valid_sections |=
+			cpu_to_le16(I40E_AQ_VSI_PROP_SWITCH_VALID);
+		ctxt.info.switch_id =
+			cpu_to_le16(I40E_AQ_VSI_SW_ID_FLAG_LOCAL_LB);
+		ret = i40e_aq_update_vsi_params(hw, &ctxt, NULL);
+		if (ret != I40E_SUCCESS) {
+			PMD_DRV_LOG(ERR, "Failed to disable source pruning");
+			goto fail_msix_alloc;
+		}
+
 		/* TC, queue mapping */
 		memset(&ctxt, 0, sizeof(ctxt));
 		vsi->info.valid_sections |=

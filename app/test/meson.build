@@ -237,6 +237,7 @@ fast_tests = [
         ['rwlock_rda_autotest', true],
         ['rwlock_rds_wrm_autotest', true],
         ['rwlock_rde_wro_autotest', true],
+        ['sched_approxtest', true],
         ['sched_autotest', true],
 		['security_autotest', false],
         ['spinlock_autotest', true],

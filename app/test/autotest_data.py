@@ -310,6 +310,12 @@ parallel_test_list = [
         "Report":  None,
     },
     {
+        "Name":    "Sched approxtest",
+        "Command": "sched_approxtest",
+        "Func":    default_autotest,
+        "Report":  None,
+    },
+    {
         "Name":    "Eventdev selftest octeontx",
         "Command": "eventdev_selftest_octeontx",
         "Func":    default_autotest,

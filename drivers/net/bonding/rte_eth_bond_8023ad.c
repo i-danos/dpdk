@@ -1051,7 +1051,8 @@ bond_mode_8023ad_activate_slave(struct rte_eth_dev *bond_dev,
 	memcpy(&port->partner_admin, &initial, sizeof(struct port_params));
 
 	/* default states */
-	port->actor_state = STATE_AGGREGATION | STATE_LACP_ACTIVE | STATE_DEFAULTED;
+	port->actor_state = STATE_AGGREGATION | STATE_LACP_ACTIVE |
+			    STATE_DEFAULTED | port->actor_state_ext;
 	port->partner_state = STATE_LACP_ACTIVE | STATE_AGGREGATION;
 	port->sm_flags = SM_FLAGS_BEGIN;
 
@@ -1512,6 +1513,11 @@ rte_eth_bond_8023ad_slave_info(uint16_t port_id, uint16_t slave_id,
 	bond_dev = &rte_eth_devices[port_id];
 
 	internals = bond_dev->data->dev_private;
+
+	/* make sure polled link state is up-to-date */
+	if (internals->link_status_polling_enabled)
+		bond_ethdev_slave_link_status_change_monitor(bond_dev);
+
 	if (find_slave_by_id(internals->active_slaves,
 			internals->active_slave_count, slave_id) ==
 				internals->active_slave_count)
@@ -1536,21 +1542,20 @@ bond_8023ad_ext_validate(uint16_t port_id, uint16_t slave_id)
 	struct rte_eth_dev *bond_dev;
 	struct bond_dev_private *internals;
 	struct mode8023ad_private *mode4;
+	int i;
 
 	if (rte_eth_bond_mode_get(port_id) != BONDING_MODE_8023AD)
 		return -EINVAL;
 
 	bond_dev = &rte_eth_devices[port_id];
 
-	if (!bond_dev->data->dev_started)
-		return -EINVAL;
-
 	internals = bond_dev->data->dev_private;
-	if (find_slave_by_id(internals->active_slaves,
-			internals->active_slave_count, slave_id) ==
-				internals->active_slave_count)
-		return -EINVAL;
+	for (i = 0; i < internals->slave_count; i++)
+		if (internals->slaves[i].port_id == slave_id)
+			goto found_slave;
+	return -EINVAL;
 
+found_slave:
 	mode4 = &internals->mode4;
 	if (mode4->slowrx_cb == NULL)
 		return -EINVAL;
@@ -1571,10 +1576,13 @@ rte_eth_bond_8023ad_ext_collect(uint16_t port_id, uint16_t slave_id,
 
 	port = &bond_mode_8023ad_ports[slave_id];
 
-	if (enabled)
+	if (enabled) {
 		ACTOR_STATE_SET(port, COLLECTING);
-	else
+		ACTOR_STATE_SET_EXT(port, COLLECTING);
+	} else {
 		ACTOR_STATE_CLR(port, COLLECTING);
+		ACTOR_STATE_CLR_EXT(port, COLLECTING);
+	}
 
 	return 0;
 }
@@ -1592,10 +1600,13 @@ rte_eth_bond_8023ad_ext_distrib(uint16_t port_id, uint16_t slave_id,
 
 	port = &bond_mode_8023ad_ports[slave_id];
 
-	if (enabled)
+	if (enabled) {
 		ACTOR_STATE_SET(port, DISTRIBUTING);
-	else
+		ACTOR_STATE_SET_EXT(port, DISTRIBUTING);
+	} else {
 		ACTOR_STATE_CLR(port, DISTRIBUTING);
+		ACTOR_STATE_CLR_EXT(port, DISTRIBUTING);
+	}
 
 	return 0;
 }
@@ -1633,11 +1644,21 @@ rte_eth_bond_8023ad_ext_slowtx(uint16_t port_id, uint16_t slave_id,
 		struct rte_mbuf *lacp_pkt)
 {
 	struct port *port;
+	struct rte_eth_dev *bond_dev;
+	struct bond_dev_private *internals;
 	int res;
 
 	res = bond_8023ad_ext_validate(port_id, slave_id);
 	if (res != 0)
 		return res;
+
+	bond_dev = &rte_eth_devices[port_id];
+	internals = bond_dev->data->dev_private;
+	if (find_slave_by_id(internals->active_slaves,
+			     internals->active_slave_count, slave_id) ==
+			     internals->active_slave_count)
+		return -EINVAL;
+
 
 	port = &bond_mode_8023ad_ports[slave_id];
 

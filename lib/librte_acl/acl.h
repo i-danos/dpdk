@@ -163,18 +163,7 @@ struct rte_acl_bld_trie {
 	struct rte_acl_node *trie;
 };
 
-struct rte_acl_ctx {
-	char                name[RTE_ACL_NAMESIZE];
-	/** Name of the ACL context. */
-	int32_t             socket_id;
-	/** Socket ID to allocate memory from. */
-	enum rte_acl_classify_alg alg;
-	uint32_t           first_load_sz;
-	void               *rules;
-	uint32_t            max_rules;
-	uint32_t            rule_sz;
-	uint32_t            num_rules;
-	uint32_t            num_categories;
+struct rte_acl_rt_ctx {
 	uint32_t            num_tries;
 	uint32_t            match_index;
 	uint64_t            no_match;
@@ -185,11 +174,55 @@ struct rte_acl_ctx {
 	void               *mem;
 	size_t              mem_sz;
 	struct rte_acl_config config; /* copy of build config. */
+	struct rte_acl_ctx *acx;
 };
+
+struct rte_acl_ctx {
+	char                name[RTE_ACL_NAMESIZE];
+	/** Name of the ACL context. */
+	int32_t             socket_id;
+	/** Socket ID to allocate memory from. */
+	enum rte_acl_classify_alg alg;
+	uint32_t           first_load_sz;
+	void               *rules;
+	unsigned int        flags;
+	struct rte_hash    *ht;
+	/** ACL ctx hashtable: only used if flag ACL_F_USE_HASHTABLE is set.
+	 *  Not used at runtime/classification, just build-time.
+	 */
+	struct rte_mempool *rule_pool;
+	/** ACL ctx rule memory pool. Only used if ACL_F_USE_HASHTABLE flag
+	 *  is set.
+	 */
+	uint32_t            max_rules;
+	uint32_t            rule_sz;
+	uint32_t            num_rules;
+	uint32_t            num_categories;
+
+	/* RCU config. */
+	struct rte_rcu_qsbr *v;          /* RCU QSBR variable. */
+	struct rte_rcu_qsbr_dq *dq;      /* RCU QSBR defer queue. */
+	enum rte_acl_qsbr_mode rcu_mode; /* Blocking, defer queue. */
+	unsigned int rcu_thread_id;
+	/* thread ID to report quiescent state on */
+
+	struct rte_acl_rt_ctx *rcx;
+};
+
+struct rte_acl_rcu_dq_entry {
+	struct rte_acl_rt_ctx *rcx;
+};
+
+void
+rte_acl_rcu_qsbr_free_rcx(void *p, void *e, unsigned int n);
 
 int rte_acl_gen(struct rte_acl_ctx *ctx, struct rte_acl_trie *trie,
 	struct rte_acl_bld_trie *node_bld_trie, uint32_t num_tries,
 	uint32_t num_categories, uint32_t data_index_sz, size_t max_size);
+
+/* mask hash-table */
+int rte_acl_create_mask_ht(void);
+void rte_acl_destroy_mask_ht(void);
 
 typedef int (*rte_acl_classify_t)
 (const struct rte_acl_ctx *, const uint8_t **, uint32_t *, uint32_t, uint32_t);

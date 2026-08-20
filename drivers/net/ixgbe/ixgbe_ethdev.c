@@ -588,7 +588,7 @@ static const struct eth_dev_ops ixgbevf_eth_dev_ops = {
 	.vlan_filter_set      = ixgbevf_vlan_filter_set,
 	.vlan_strip_queue_set = ixgbevf_vlan_strip_queue_set,
 	.vlan_offload_set     = ixgbevf_vlan_offload_set,
-	.rx_queue_setup       = ixgbe_dev_rx_queue_setup,
+	.rx_queue_setup       = ixgbevf_dev_rx_queue_setup,
 	.rx_queue_release     = ixgbe_dev_rx_queue_release,
 	.tx_queue_setup       = ixgbe_dev_tx_queue_setup,
 	.tx_queue_release     = ixgbe_dev_tx_queue_release,
@@ -1083,7 +1083,7 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 				     "Using default TX function.");
 		}
 
-		ixgbe_set_rx_function(eth_dev);
+		ixgbe_set_rx_function(eth_dev, true);
 
 		return 0;
 	}
@@ -1566,7 +1566,7 @@ eth_ixgbevf_dev_init(struct rte_eth_dev *eth_dev)
 				     "No TX queues configured yet. Using default TX function.");
 		}
 
-		ixgbe_set_rx_function(eth_dev);
+		ixgbe_set_rx_function(eth_dev, true);
 
 		return 0;
 	}
@@ -1819,8 +1819,8 @@ ixgbe_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 	uint32_t vid_idx;
 	uint32_t vid_bit;
 
-	vid_idx = (uint32_t) ((vlan_id >> 5) & 0x7F);
-	vid_bit = (uint32_t) (1 << (vlan_id & 0x1F));
+	vid_idx = ixgbe_vfta_index(vlan_id);
+	vid_bit = ixgbe_vfta_bit(vlan_id);
 	vfta = IXGBE_READ_REG(hw, IXGBE_VFTA(vid_idx));
 	if (on)
 		vfta |= vid_bit;
@@ -2560,6 +2560,9 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 
 	/* Stop the link setup handler before resetting the HW. */
 	ixgbe_dev_wait_setup_link_complete(dev, 0);
+
+	/* Stop the delayed interrupt handler. */
+	rte_eal_alarm_cancel(ixgbe_dev_interrupt_delayed_handler, dev);
 
 	/* disable uio/vfio intr/eventfd mapping */
 	rte_intr_disable(intr_handle);
@@ -3944,7 +3947,9 @@ ixgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 
 #if defined(RTE_ARCH_X86) || defined(__ARM_NEON)
 	if (dev->rx_pkt_burst == ixgbe_recv_pkts_vec ||
-	    dev->rx_pkt_burst == ixgbe_recv_scattered_pkts_vec)
+	    dev->rx_pkt_burst == ixgbe_recv_scattered_pkts_vec ||
+	    dev->rx_pkt_burst == ixgbevf_recv_pkts_vec ||
+	    dev->rx_pkt_burst == ixgbevf_recv_scattered_pkts_vec)
 		return ptypes;
 #endif
 	return NULL;
@@ -5532,8 +5537,8 @@ ixgbevf_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 		PMD_INIT_LOG(ERR, "Unable to set VF vlan");
 		return ret;
 	}
-	vid_idx = (uint32_t) ((vlan_id >> 5) & 0x7F);
-	vid_bit = (uint32_t) (1 << (vlan_id & 0x1F));
+	vid_idx = ixgbe_vfta_index(vlan_id);
+	vid_bit = ixgbe_vfta_bit(vlan_id);
 
 	/* Save what we set and retore it after device reset */
 	if (on)

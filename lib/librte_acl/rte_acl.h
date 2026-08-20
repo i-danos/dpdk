@@ -69,6 +69,35 @@ struct rte_acl_config {
 	/**< max memory limit for internal run-time structures. */
 };
 
+/** RCU reclamation modes */
+enum rte_acl_qsbr_mode {
+	/** Create defer queue for reclaim. */
+	RTE_ACL_QSBR_MODE_DQ = 0,
+	/** Use blocking mode reclaim. No defer queue created. */
+	RTE_ACL_QSBR_MODE_SYNC
+};
+
+/** ACL RCU QSBR configuration. */
+struct rte_acl_rcu_config {
+	struct rte_rcu_qsbr *v; /**< RCU QSBR variable. */
+	enum rte_acl_qsbr_mode mode;
+	/**< Mode of RCU QSBR: RTE_ACL_QSBR_MODE_xxx */
+	unsigned int thread_id;
+	/**< Thread ID of the caller if it is registered to report quiescent
+	 * state on this QS variable. If not, pass RTE_QSBR_THRID_INVALID.
+	 */
+	uint32_t dq_size; /**<Defer queue size. */
+	uint32_t dq_trigger_reclaim_limit;
+	/**<Threshold to trigger defer queue automatic reclamation.
+	 * Set to 0, to trigger reclamation on every rte_acl_build call.
+	 */
+	uint32_t dq_max_reclaim_size;
+	/**<When a threshold to trigger automatic reclation of the defer queue
+	 * is set, this is the maximum number of rte_acl_build runntime contexts
+	 * being reclaimed.
+	 */
+};
+
 /**
  * Defines the value of a field for a rule.
  */
@@ -122,6 +151,14 @@ RTE_ACL_RULE_DEF(rte_acl_rule,);
 /** Max number of characters in name.*/
 #define	RTE_ACL_NAMESIZE		32
 
+/** Type of function that can be used for calculating the hash value. */
+typedef uint32_t (*rte_acl_hash_function)(const void *key, uint32_t key_len,
+					  uint32_t init_val);
+
+/** Type of function to compare the rule hash key */
+typedef int (*rte_acl_hash_cmp_eq_t)(const void *key1, const void *key2,
+				     size_t key_len);
+
 /**
  * Parameters used when creating the ACL context.
  */
@@ -130,7 +167,15 @@ struct rte_acl_param {
 	int         socket_id;    /**< Socket ID to allocate memory for. */
 	uint32_t    rule_size;    /**< Size of each rule. */
 	uint32_t    max_rule_num; /**< Maximum number of rules. */
+
+	unsigned int flags;                  /**< Flags of the ACL context. */
+	struct rte_mempool *rule_pool;       /**< Memory pool for ACLs, used with ACL_F_USE_HASHTABLE. */
+	uint32_t hash_key_len;               /**< Length of hash key. */
+	rte_acl_hash_function hash_func;     /**< Function used to calculate hash. */
+	rte_acl_hash_cmp_eq_t hash_cmp_func; /**< Function used to compare keys of hash-table. */
 };
+
+#define ACL_F_USE_HASHTABLE 0x0001 /**< Use hashtable for ACL context entries. */
 
 
 /**
@@ -170,6 +215,25 @@ void
 rte_acl_free(struct rte_acl_ctx *ctx);
 
 /**
+ * Associate RCU QSBR variable with the ACL context.
+ *
+ * @param ctx
+ *   ACL context to add RCU QSBR
+ * @param cfg
+ *   RCU QSBR configuration
+ * @return
+ *   On success - 0
+ *   On error - 1 with error code set in rte_errno.
+ *   Possible rte_errno errors include:
+ *   - EINVAL if the parameters are invalid.
+ *   - EEXIST if QSBR already added.
+ *   - ENOMEM if the memory allocation failed.
+ *   - Zero if operation completed successfully.
+ */
+int
+rte_acl_rcu_qsbr_add(struct rte_acl_ctx *ctx, struct rte_acl_rcu_config *cfg);
+
+/**
  * Add rules to an existing ACL context.
  * This function is not multi-thread safe.
  *
@@ -191,6 +255,41 @@ rte_acl_free(struct rte_acl_ctx *ctx);
 int
 rte_acl_add_rules(struct rte_acl_ctx *ctx, const struct rte_acl_rule *rules,
 	uint32_t num);
+
+/**
+ * Delete rule of an existing ACL context.
+ * This function is not multi-thread safe.
+ *
+ * @param ctx
+ *   ACL context to add patterns to.
+ * @param rule
+ *   Single rule which should get deleted.
+ * @return
+ *   - -ENOENT if the rule could not be found.
+ *   - -EINVAL if the parameters are invalid.
+ *   - Zero if operation completed successfully.
+ */
+int
+rte_acl_del_rule(struct rte_acl_ctx *ctx, const struct rte_acl_rule *rule);
+
+/**
+ * Copy rules from src context to dest context
+ * This function is not multi-thread safe
+ * This function is used to copy the build time array of rules maintained
+ * within the acl context to a new context to enable a merge of contexts
+ *
+ * @param dst_ctx
+ *  Destination context to add rules to
+ * @param src_ctx
+ *  Source context to copy rules from
+ * @return
+ *  - -ENOMEM - if there is no space in the ACL context for these rules
+ *  - -EINVAL if the parameters are invalid
+ *  - Zero if the operation completed successfully.
+ */
+int
+rte_acl_copy_rules(struct rte_acl_ctx *dst_ctx,
+		   const struct rte_acl_ctx *src_ctx);
 
 /**
  * Delete all rules from the ACL context.

@@ -264,6 +264,10 @@ virtio_xmit_pkts_packed_vec(void *tx_queue, struct rte_mbuf **tx_pkts,
 	if (unlikely(nb_pkts < 1))
 		return nb_pkts;
 
+#ifdef RTE_ETHDEV_TX_PREPARE_NOOP
+	nb_pkts = virtio_xmit_pkts_prepare(tx_queue, tx_pkts, nb_pkts);
+#endif
+
 	PMD_TX_LOG(DEBUG, "%d packets to xmit", nb_pkts);
 
 	if (vq->vq_free_cnt <= vq->vq_nentries - vq->vq_free_thresh)

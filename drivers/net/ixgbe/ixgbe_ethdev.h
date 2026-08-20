@@ -37,6 +37,7 @@
 #define IXGBE_RXD_STAT_TMST         0x10000    /* Timestamped Packet indication */
 #define IXGBE_ADVTXD_TUCMD_L4T_RSV  0x00001800 /* L4 Packet TYPE, resvd  */
 #define IXGBE_RXDADV_ERR_CKSUM_BIT  30
+#define IXGBE_RXDADV_ERR_RXE_BIT    29
 #define IXGBE_RXDADV_ERR_CKSUM_MSK  3
 #define IXGBE_ADVTXD_MACLEN_SHIFT   9          /* Bit shift for l2_len */
 #define IXGBE_NB_STAT_MAPPING_REGS  32
@@ -598,6 +599,11 @@ int  ixgbe_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t rx_queue_id,
 		const struct rte_eth_rxconf *rx_conf,
 		struct rte_mempool *mb_pool);
 
+int  ixgbevf_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t rx_queue_id,
+				uint16_t nb_rx_desc, unsigned int socket_id,
+				const struct rte_eth_rxconf *rx_conf,
+				struct rte_mempool *mb_pool);
+
 int  ixgbe_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t tx_queue_id,
 		uint16_t nb_tx_desc, unsigned int socket_id,
 		const struct rte_eth_txconf *tx_conf);
@@ -831,6 +837,39 @@ ixgbe_ethertype_filter_remove(struct ixgbe_filter_info *filter_info,
 	filter_info->ethertype_filters[idx].etqs = 0;
 	filter_info->ethertype_filters[idx].etqs = FALSE;
 	return idx;
+}
+
+int ixgbe_fdir_ctrl_func(struct rte_eth_dev *dev,
+			enum rte_filter_op filter_op, void *arg);
+
+/*
+ * Calculate index in vfta array of the 32 bit value enclosing
+ * a given vlan id
+ */
+static inline uint32_t
+ixgbe_vfta_index(uint16_t vlan)
+{
+	return (vlan >> 5) & 0x7f;
+}
+
+/*
+ * Calculate vfta array entry bitmask for vlan id within the
+ * enclosing 32 bit entry.
+ */
+static inline uint32_t
+ixgbe_vfta_bit(uint16_t vlan)
+{
+	return 1 << (vlan & 0x1f);
+}
+
+/*
+ * Check in the vfta bit array if the bit corresponding to
+ * the given vlan is set.
+ */
+static inline bool
+ixgbe_vfta_is_vlan_set(const struct ixgbe_vfta *vfta, uint16_t vlan)
+{
+	return (vfta->vfta[ixgbe_vfta_index(vlan)] & ixgbe_vfta_bit(vlan)) != 0;
 }
 
 #endif /* _IXGBE_ETHDEV_H_ */

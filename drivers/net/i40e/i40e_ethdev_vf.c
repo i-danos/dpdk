@@ -2930,6 +2930,17 @@ i40evf_set_mc_addr_list(struct rte_eth_dev *dev,
 {
 	struct i40e_vf *vf = I40EVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
 	int err;
+	uint32_t i;
+
+	for (i = 0; i < mc_addrs_num;) {
+		if (rte_is_broadcast_ether_addr(&mc_addrs[i]))
+			mc_addrs[i] = mc_addrs[--mc_addrs_num];
+		else
+			i++;
+	}
+
+	if (mc_addrs_num == 0)
+		return 0;
 
 	/* flush previous addresses */
 	err = i40evf_add_del_mc_addr_list(dev, vf->mc_addrs, vf->mc_addrs_num,

@@ -87,7 +87,7 @@ transition8(ymm_t next_input, const uint64_t *trans, ymm_t *tr_lo, ymm_t *tr_hi)
  * tr_hi contains high 32 bits for 8 transition.
  */
 static inline void
-acl_process_matches_avx2x8(const struct rte_acl_ctx *ctx,
+acl_process_matches_avx2x8(const struct rte_acl_rt_ctx *ctx,
 	struct parms *parms, struct acl_flow_data *flows, uint32_t slot,
 	ymm_t matches, ymm_t *tr_lo, ymm_t *tr_hi)
 {
@@ -131,7 +131,7 @@ acl_process_matches_avx2x8(const struct rte_acl_ctx *ctx,
 }
 
 static inline void
-acl_match_check_avx2x8(const struct rte_acl_ctx *ctx, struct parms *parms,
+acl_match_check_avx2x8(const struct rte_acl_rt_ctx *ctx, struct parms *parms,
 	struct acl_flow_data *flows, uint32_t slot,
 	ymm_t *tr_lo, ymm_t *tr_hi, ymm_t match_mask)
 {
@@ -157,7 +157,7 @@ acl_match_check_avx2x8(const struct rte_acl_ctx *ctx, struct parms *parms,
  * Execute trie traversal for up to 16 flows in parallel.
  */
 static inline int
-search_avx2x16(const struct rte_acl_ctx *ctx, const uint8_t **data,
+search_avx2x16(const struct rte_acl_rt_ctx *ctx, const uint8_t **data,
 	uint32_t *results, uint32_t total_packets, uint32_t categories)
 {
 	uint32_t n;

@@ -1020,6 +1020,41 @@ struct rte_cryptodev_asym_session {
 };
 
 /**
+ * Create an empty symmetric session mempool.
+ *
+ * The mempool is allocated and initialized, but it is not populated: no memory
+ * is allocated for the mempool elements.
+ *
+ * @param name
+ *   The unique mempool name.
+ * @param nb_elts
+ *   The number of elements in the mempool.
+ * @param elt_size
+ *   The size of the element. This value will be ignored if it is smaller than
+ *   the minimum session header size required for the system. For the user who
+ *   wanst to use the same mempool for sym session and session private data it
+ *   can be the maximum value of all existing devices' private data and session
+ *   header sizes.
+ * @param cache_size
+ *   The number of per-lcore cache elements
+ * @param priv_size
+ *   The private data size of each session.
+ * @param socket_id
+ *   The *socket_id* argument is the socket identifier in the case of
+ *   NUMA. The value can be *SOCKET_ID_ANY* if there is no NUMA
+ *   constraint for the reserved zone.
+ *
+ * @return
+ *  The pointer on the empty symmetric session mempool. NULL on error with
+ *  rte_errno set appropriately.
+ */
+__rte_experimental
+struct rte_mempool *
+rte_cryptodev_sym_session_pool_create_empty(const char *name, uint32_t nb_elts,
+	uint32_t elt_size, uint32_t cache_size, uint16_t priv_size,
+	int socket_id);
+
+/**
  * Create a symmetric session mempool.
  *
  * @param name

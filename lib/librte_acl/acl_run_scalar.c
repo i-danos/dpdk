@@ -13,7 +13,7 @@
  */
 static inline void
 resolve_priority_scalar(uint64_t transition, int n,
-	const struct rte_acl_ctx *ctx, struct parms *parms,
+	const struct rte_acl_rt_ctx *ctx, struct parms *parms,
 	const struct rte_acl_match_results *p, uint32_t categories)
 {
 	uint32_t i;
@@ -107,7 +107,7 @@ scalar_transition(const uint64_t *trans_table, uint64_t transition,
 }
 
 int
-rte_acl_classify_scalar(const struct rte_acl_ctx *ctx, const uint8_t **data,
+rte_acl_classify_scalar(const struct rte_acl_ctx *acx, const uint8_t **data,
 	uint32_t *results, uint32_t num, uint32_t categories)
 {
 	int n;
@@ -117,6 +117,7 @@ rte_acl_classify_scalar(const struct rte_acl_ctx *ctx, const uint8_t **data,
 	uint64_t index_array[MAX_SEARCHES_SCALAR];
 	struct completion cmplt[MAX_SEARCHES_SCALAR];
 	struct parms parms[MAX_SEARCHES_SCALAR];
+	struct rte_acl_rt_ctx *ctx = acx->rcx;
 
 	acl_set_flow(&flows, cmplt, RTE_DIM(cmplt), data, results, num,
 		categories, ctx->trans_table);

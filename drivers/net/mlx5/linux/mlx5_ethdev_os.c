@@ -336,100 +336,6 @@ mlx5_find_master_dev(struct rte_eth_dev *dev)
 }
 
 /**
- * DPDK callback to retrieve physical link information.
- *
- * @param dev
- *   Pointer to Ethernet device structure.
- * @param[out] link
- *   Storage for current link status.
- *
- * @return
- *   0 on success, a negative errno value otherwise and rte_errno is set.
- */
-static int
-mlx5_link_update_unlocked_gset(struct rte_eth_dev *dev,
-			       struct rte_eth_link *link)
-{
-	struct mlx5_priv *priv = dev->data->dev_private;
-	struct ethtool_cmd edata = {
-		.cmd = ETHTOOL_GSET /* Deprecated since Linux v4.5. */
-	};
-	struct ifreq ifr;
-	struct rte_eth_link dev_link;
-	int link_speed = 0;
-	int ret;
-
-	ret = mlx5_ifreq(dev, SIOCGIFFLAGS, &ifr);
-	if (ret) {
-		DRV_LOG(WARNING, "port %u ioctl(SIOCGIFFLAGS) failed: %s",
-			dev->data->port_id, strerror(rte_errno));
-		return ret;
-	}
-	dev_link = (struct rte_eth_link) {
-		.link_status = ((ifr.ifr_flags & IFF_UP) &&
-				(ifr.ifr_flags & IFF_RUNNING)),
-	};
-	ifr = (struct ifreq) {
-		.ifr_data = (void *)&edata,
-	};
-	ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr);
-	if (ret) {
-		if (ret == -ENOTSUP && priv->representor) {
-			struct rte_eth_dev *master;
-
-			/*
-			 * For representors we can try to inherit link
-			 * settings from the master device. Actually
-			 * link settings do not make a lot of sense
-			 * for representors due to missing physical
-			 * link. The old kernel drivers supported
-			 * emulated settings query for representors,
-			 * the new ones do not, so we have to add
-			 * this code for compatibility issues.
-			 */
-			master = mlx5_find_master_dev(dev);
-			if (master) {
-				ifr = (struct ifreq) {
-					.ifr_data = (void *)&edata,
-				};
-				ret = mlx5_ifreq(master, SIOCETHTOOL, &ifr);
-			}
-		}
-		if (ret) {
-			DRV_LOG(WARNING,
-				"port %u ioctl(SIOCETHTOOL,"
-				" ETHTOOL_GSET) failed: %s",
-				dev->data->port_id, strerror(rte_errno));
-			return ret;
-		}
-	}
-	link_speed = ethtool_cmd_speed(&edata);
-	if (link_speed == -1)
-		dev_link.link_speed = ETH_SPEED_NUM_UNKNOWN;
-	else
-		dev_link.link_speed = link_speed;
-	priv->link_speed_capa = 0;
-	if (edata.supported & SUPPORTED_Autoneg)
-		priv->link_speed_capa |= ETH_LINK_SPEED_AUTONEG;
-	if (edata.supported & (SUPPORTED_1000baseT_Full |
-			       SUPPORTED_1000baseKX_Full))
-		priv->link_speed_capa |= ETH_LINK_SPEED_1G;
-	if (edata.supported & SUPPORTED_10000baseKR_Full)
-		priv->link_speed_capa |= ETH_LINK_SPEED_10G;
-	if (edata.supported & (SUPPORTED_40000baseKR4_Full |
-			       SUPPORTED_40000baseCR4_Full |
-			       SUPPORTED_40000baseSR4_Full |
-			       SUPPORTED_40000baseLR4_Full))
-		priv->link_speed_capa |= ETH_LINK_SPEED_40G;
-	dev_link.link_duplex = ((edata.duplex == DUPLEX_HALF) ?
-				ETH_LINK_HALF_DUPLEX : ETH_LINK_FULL_DUPLEX);
-	dev_link.link_autoneg = !(dev->data->dev_conf.link_speeds &
-			ETH_LINK_SPEED_FIXED);
-	*link = dev_link;
-	return 0;
-}
-
-/**
  * Retrieve physical link information (unlocked version using new ioctl).
  *
  * @param dev
@@ -592,8 +498,6 @@ mlx5_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 
 	do {
 		ret = mlx5_link_update_unlocked_gs(dev, &dev_link);
-		if (ret == -ENOTSUP)
-			ret = mlx5_link_update_unlocked_gset(dev, &dev_link);
 		if (ret == 0)
 			break;
 		/* Handle wait to complete situation. */
@@ -1246,7 +1150,8 @@ int mlx5_get_module_eeprom(struct rte_eth_dev *dev,
  *   rte_errno is set.
  */
 int
-mlx5_os_read_dev_counters(struct rte_eth_dev *dev, uint64_t *stats)
+mlx5_os_read_dev_counters(struct rte_eth_dev *dev, uint64_t *stats,
+			  uint16_t mlx5_stats_n)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_xstats_ctrl *xstats_ctrl = &priv->xstats_ctrl;
@@ -1267,7 +1172,7 @@ mlx5_os_read_dev_counters(struct rte_eth_dev *dev, uint64_t *stats)
 			dev->data->port_id);
 		return ret;
 	}
-	for (i = 0; i != xstats_ctrl->mlx5_stats_n; ++i) {
+	for (i = 0; i != mlx5_stats_n; ++i) {
 		if (xstats_ctrl->info[i].dev) {
 			ret = mlx5_os_read_dev_stat(priv,
 					    xstats_ctrl->info[i].ctr_name,
@@ -1508,7 +1413,8 @@ mlx5_os_stats_init(struct rte_eth_dev *dev)
 	MLX5_ASSERT(xstats_ctrl->mlx5_stats_n <= MLX5_MAX_XSTATS);
 	xstats_ctrl->stats_n = dev_stats_n;
 	/* Copy to base at first time. */
-	ret = mlx5_os_read_dev_counters(dev, xstats_ctrl->base);
+	ret = mlx5_os_read_dev_counters(dev, xstats_ctrl->base,
+					xstats_ctrl->mlx5_stats_n);
 	if (ret)
 		DRV_LOG(ERR, "port %u cannot read device counters: %s",
 			dev->data->port_id, strerror(rte_errno));
